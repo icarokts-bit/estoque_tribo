@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tribo Estoque - Cloud v2.7</title>
+    <title>Tribo Estoque - Cloud v2.8</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -241,9 +241,9 @@
             const handleExitSave = async (e) => {
                 e.preventDefault();
                 if (!exitItem || Number(exitQty) <= 0) return;
-                const { db, updateDoc, doc, addDoc, serverTimestamp } = window.fbSDK;
+                // FIX: Adicionado 'collection' na desestruturação abaixo
+                const { db, updateDoc, doc, addDoc, collection, serverTimestamp } = window.fbSDK;
                 
-                // Pega todos os registros originais que compõem este item consolidado
                 const relatedItems = rawInventory.filter(i => i.name.toLowerCase().trim() === exitItem.name.toLowerCase().trim());
                 let remainingToExit = Number(exitQty);
                 const totalAvailable = relatedItems.reduce((acc, curr) => acc + curr.quantity, 0);
@@ -254,7 +254,6 @@
                 }
 
                 try {
-                    // Algoritmo para abater das quantidades disponíveis em cada documento (FIFO simplificado)
                     for (const item of relatedItems) {
                         if (remainingToExit <= 0) break;
                         
@@ -269,7 +268,7 @@
                     }
 
                     await addDoc(collection(db, "history"), {
-                        productId: exitItem.id, // Referência do primeiro item
+                        productId: exitItem.id,
                         productName: exitItem.name,
                         type: 'Saída (Baixa)',
                         quantity: -Number(exitQty),
@@ -282,7 +281,7 @@
                     setIsExitModalOpen(false);
                     setExitQty(1);
                 } catch (err) {
-                    console.error(err);
+                    console.error("Erro na Saída:", err);
                     showToast("Erro ao processar a saída", "error");
                 }
             };
