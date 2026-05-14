@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tribo Estoque - Cloud v2.0</title>
+    <title>Tribo Estoque - Cloud v2.1</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -41,7 +41,7 @@
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; overflow-x: hidden; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
@@ -56,7 +56,9 @@
         const { useState, useEffect, useMemo } = React;
 
         const Icon = ({ name, size = 20, className = "" }) => {
-            useEffect(() => { lucide.createIcons(); }, [name]);
+            useEffect(() => { 
+                if (window.lucide) window.lucide.createIcons(); 
+            }, [name]);
             return <i data-lucide={name} style={{width: size, height: size}} className={className}></i>;
         };
 
@@ -79,12 +81,47 @@
             const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
             const [newCategoryName, setNewCategoryName] = useState('');
 
-            // Obter lista única de categorias existentes para o select
-            const existingCategories = useMemo(() => {
-                const cats = new Set(inventory.map(i => i.category));
-                return Array.from(cats).sort();
-            }, [inventory]);
+            // Sincronização com Firebase
+            useEffect(() => {
+                const initSync = async () => {
+                    if (!window.fbSDK) return;
+                    const { db, auth, collection, onSnapshot, query, orderBy, signInAnonymously } = window.fbSDK;
+                    
+                    try {
+                        await signInAnonymously(auth);
+                        
+                        // Escutar Estoque
+                        const qInv = query(collection(db, "inventory"));
+                        const unsubInv = onSnapshot(qInv, (snapshot) => {
+                            const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setInventory(items);
+                            setLoading(false);
+                        });
 
+                        // Escutar Histórico
+                        const qHist = query(collection(db, "history"), orderBy("timestamp", "desc"), limit(50));
+                        const unsubHist = onSnapshot(qHist, (snapshot) => {
+                            const entries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setHistory(entries);
+                        });
+
+                        return () => { unsubInv(); unsubHist(); };
+                    } catch (err) {
+                        console.error("Firebase Error:", err);
+                        setLoading(false);
+                    }
+                };
+
+                const interval = setInterval(() => {
+                    if (window.fbSDK) {
+                        initSync();
+                        clearInterval(interval);
+                    }
+                }, 500);
+                return () => clearInterval(interval);
+            }, []);
+
+            // Cálculo Automático de Caixas
             useEffect(() => {
                 if (formData.isBoxEntry) {
                     const price = parseFloat(formData.boxPrice) || 0;
@@ -92,7 +129,11 @@
                     const boxes = parseInt(formData.boxQuantity) || 1;
                     const calculatedUnit = units > 0 ? price / units : 0;
                     const totalUnits = boxes * units;
-                    setFormData(prev => ({ ...prev, unitPrice: calculatedUnit, quantity: totalUnits }));
+                    setFormData(prev => ({ 
+                        ...prev, 
+                        unitPrice: calculatedUnit, 
+                        quantity: totalUnits 
+                    }));
                 }
             }, [formData.boxPrice, formData.unitsPerBox, formData.boxQuantity, formData.isBoxEntry]);
 
@@ -107,11 +148,6 @@
                 
                 const finalCategory = showNewCategoryInput ? newCategoryName : formData.category;
 
-                if (!finalCategory) {
-                    showToast("Defina uma categoria!", "error");
-                    return;
-                }
-
                 const data = {
                     name: formData.name,
                     category: finalCategory,
@@ -119,8 +155,7 @@
                     minStock: Number(formData.minStock),
                     unitPrice: Number(formData.unitPrice),
                     whatsappContact: formData.whatsappContact,
-                    lastUpdate: new Date().toISOString(),
-                    updatedAt: serverTimestamp()
+                    lastUpdate: new Date().toISOString()
                 };
 
                 try {
@@ -151,7 +186,9 @@
                     setIsModalOpen(false);
                     setShowNewCategoryInput(false);
                     setNewCategoryName('');
-                } catch (err) { showToast("Erro ao salvar", "error"); }
+                } catch (err) { 
+                    showToast("Erro ao salvar", "error"); 
+                }
             };
 
             const metrics = useMemo(() => {
@@ -159,15 +196,26 @@
                 const lowStockItems = inventory.filter(item => item.quantity <= item.minStock);
                 const stagnantItems = inventory.filter(item => {
                     const lastDate = new Date(item.lastUpdate);
-                    return (Math.ceil(Math.abs(new Date() - lastDate) / (1000 * 60 * 60 * 24))) > 14;
+                    const diffDays = (Math.ceil(Math.abs(new Date() - lastDate) / (1000 * 60 * 60 * 24)));
+                    return diffDays > 14;
                 });
-                return { totalValue, lowStockCount: lowStockItems.length, stagnantCount: stagnantItems.length, lowStockItems, stagnantItems };
+                return { totalValue, lowStockCount: lowStockItems.length, stagnantCount: stagnantItems.length };
             }, [inventory]);
 
+            const existingCategories = useMemo(() => {
+                const cats = new Set(inventory.map(i => i.category));
+                return Array.from(cats).sort();
+            }, [inventory]);
+
+            const sendWhatsApp = (item) => {
+                const msg = `🚨 *Alerta de Estoque - Tribo*%0A*Produto:* ${item.name}%0A*Quantidade Atual:* ${item.quantity} unidades%0A*Status:* Abaixo do mínimo (${item.minStock}). Favor providenciar reposição.`;
+                window.open(`https://wa.me/${item.whatsappContact}?text=${msg}`, '_blank');
+            };
+
             if (loading) return (
-                <div className="flex h-screen items-center justify-center flex-col gap-4">
+                <div className="flex h-screen items-center justify-center flex-col gap-4 bg-slate-50">
                     <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="font-bold text-emerald-800 animate-pulse text-xs uppercase tracking-widest">Tribo Cloud...</p>
+                    <p className="font-bold text-emerald-800 animate-pulse text-xs uppercase tracking-widest">Sincronizando Tribo Cloud...</p>
                 </div>
             );
 
@@ -180,67 +228,68 @@
                         </div>
                     )}
 
-                    {}
                     <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 px-6 py-4">
                         <div className="max-w-7xl mx-auto flex justify-between items-center">
                             <div className="flex items-center gap-3">
                                 <div className="bg-emerald-600 p-2.5 rounded-2xl text-white shadow-lg"><Icon name="package" size={24} /></div>
                                 <div className="hidden sm:block">
                                     <h1 className="text-xl font-black text-slate-800 uppercase">Tribo Estoque</h1>
-                                    <p className="text-[8px] font-black text-emerald-600 tracking-widest uppercase">Sistema Cloud v2</p>
+                                    <p className="text-[8px] font-black text-emerald-600 tracking-widest uppercase">Cloud Live v2.1</p>
                                 </div>
                             </div>
                             <div className="flex gap-2">
-                                <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'dashboard' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Painel</button>
-                                <button onClick={() => setActiveTab('inventory_list')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'inventory_list' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Estoque</button>
-                                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'history' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Histórico</button>
-                                <button onClick={() => { setEditingItem(null); setFormData({name: '', category: 'Padaria', quantity: 0, minStock: 5, unitPrice: 0, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1, whatsappContact: '55'}); setIsModalOpen(true); }} className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold shadow-lg shadow-emerald-100 active:scale-95 transition-all">+ Comprar</button>
+                                <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'dashboard' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>Painel</button>
+                                <button onClick={() => setActiveTab('inventory_list')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'inventory_list' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>Estoque</button>
+                                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'history' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>Histórico</button>
+                                <button onClick={() => { 
+                                    setEditingItem(null); 
+                                    setFormData({name: '', category: existingCategories[0] || 'Padaria', quantity: 0, minStock: 5, unitPrice: 0, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1, whatsappContact: '55'}); 
+                                    setIsModalOpen(true); 
+                                }} className="bg-emerald-600 text-white px-4 sm:px-6 py-2 rounded-xl font-bold shadow-lg shadow-emerald-100 active:scale-95 transition-all text-xs sm:text-sm uppercase">+ Comprar</button>
                             </div>
                         </div>
                     </nav>
 
                     <main className="max-w-7xl mx-auto px-6 mt-8">
-                        {}
                         {activeTab === 'dashboard' && (
                             <div className="space-y-8 animate-in fade-in duration-500">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Patrimônio em Estoque</p>
+                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group hover:border-emerald-200 transition-all">
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Patrimônio Total</p>
                                         <p className="text-4xl font-black text-slate-800">R$ {metrics.totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                                     </div>
-                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group hover:border-amber-200 transition-all">
                                         <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Itens p/ Reposição</p>
                                         <p className="text-4xl font-black text-amber-500">{metrics.lowStockCount}</p>
                                     </div>
-                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Sem Giro (+14d)</p>
+                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group hover:border-rose-200 transition-all">
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Parado (+14 dias)</p>
                                         <p className="text-4xl font-black text-rose-500">{metrics.stagnantCount}</p>
                                     </div>
                                 </div>
                                 
                                 {metrics.lowStockCount > 0 && (
-                                    <div className="bg-amber-50 border-2 border-amber-100 rounded-[2rem] p-6 flex items-center justify-between">
-                                        <div className="flex items-center gap-4">
-                                            <div className="bg-amber-500 text-white p-3 rounded-2xl"><Icon name="alert-circle" /></div>
+                                    <div className="bg-amber-50 border-2 border-amber-100 rounded-[2rem] p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                                        <div className="flex items-center gap-4 text-center sm:text-left">
+                                            <div className="bg-amber-500 text-white p-3 rounded-2xl animate-bounce"><Icon name="alert-circle" /></div>
                                             <div>
-                                                <h4 className="font-black text-amber-900">Atenção na Reposição</h4>
-                                                <p className="text-amber-700 text-sm">Existem itens abaixo do estoque mínimo configurado.</p>
+                                                <h4 className="font-black text-amber-900">Alerta de Reposição</h4>
+                                                <p className="text-amber-700 text-sm">Existem {metrics.lowStockCount} produtos chegando ao fim.</p>
                                             </div>
                                         </div>
-                                        <button onClick={() => setActiveTab('inventory_list')} className="bg-amber-500 text-white px-6 py-2 rounded-xl font-bold text-sm">Ver Agora</button>
+                                        <button onClick={() => setActiveTab('inventory_list')} className="w-full sm:w-auto bg-amber-500 text-white px-8 py-3 rounded-xl font-bold text-sm shadow-lg shadow-amber-100 active:scale-95 transition-all">Ver Lista</button>
                                     </div>
                                 )}
                             </div>
                         )}
 
-                        {}
                         {activeTab === 'inventory_list' && (
                             <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
                                 <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                                     <h2 className="text-3xl font-black text-slate-800">Estoque por Família</h2>
                                     <div className="relative w-full md:w-80">
                                         <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                                        <input type="text" placeholder="Buscar no estoque..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="bg-white border border-slate-200 pl-12 pr-6 py-3 rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500 w-full font-bold" />
+                                        <input type="text" placeholder="Buscar produto..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="bg-white border border-slate-200 pl-12 pr-6 py-3 rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500 w-full font-bold shadow-sm" />
                                     </div>
                                 </div>
 
@@ -254,33 +303,45 @@
                                                 <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-400">{cat}</h3>
                                                 <div className="flex-1 h-px bg-slate-100"></div>
                                             </div>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                                                 {itemsInCat.map(item => (
-                                                    <div key={item.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-md transition-all group relative">
+                                                    <div key={item.id} className={`bg-white p-6 rounded-[2rem] border transition-all group relative ${item.quantity <= item.minStock ? 'border-amber-200 shadow-md shadow-amber-50' : 'border-slate-100 shadow-sm hover:shadow-md'}`}>
                                                         <div className="flex justify-between items-start mb-4">
-                                                            <div>
+                                                            <div className="pr-10">
                                                                 <h4 className="font-black text-slate-800 text-lg leading-tight">{item.name}</h4>
                                                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{item.category}</p>
                                                             </div>
-                                                            <button onClick={() => { setEditingItem(item); setFormData({ ...item, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1 }); setIsModalOpen(true); }} className="text-slate-300 hover:text-emerald-600 transition-colors">
-                                                                <Icon name="edit-3" size={18} />
-                                                            </button>
+                                                            <div className="absolute top-6 right-6 flex gap-2">
+                                                                {item.quantity <= item.minStock && (
+                                                                    <button onClick={() => sendWhatsApp(item)} className="text-emerald-500 hover:scale-110 transition-transform">
+                                                                        <Icon name="message-circle" size={20} />
+                                                                    </button>
+                                                                )}
+                                                                <button onClick={() => { 
+                                                                    setEditingItem(item); 
+                                                                    setFormData({ ...item, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1 }); 
+                                                                    setIsModalOpen(true); 
+                                                                }} className="text-slate-300 hover:text-emerald-600 transition-colors">
+                                                                    <Icon name="edit-3" size={20} />
+                                                                </button>
+                                                            </div>
                                                         </div>
                                                         <div className="flex justify-between items-end">
                                                             <div>
-                                                                <p className="text-[9px] font-black uppercase text-slate-400 mb-1">Qtd Atual</p>
-                                                                <div className={`text-2xl font-black ${item.quantity <= item.minStock ? 'text-rose-500' : 'text-slate-700'}`}>
-                                                                    {item.quantity} <span className="text-xs opacity-50">un.</span>
+                                                                <p className="text-[9px] font-black uppercase text-slate-400 mb-1">Disponível</p>
+                                                                <div className={`text-3xl font-black ${item.quantity <= item.minStock ? 'text-rose-500' : 'text-slate-800'}`}>
+                                                                    {item.quantity} <span className="text-xs opacity-40 font-bold uppercase">un</span>
                                                                 </div>
                                                             </div>
                                                             <div className="text-right">
-                                                                <p className="text-[9px] font-black uppercase text-slate-400 mb-1">Valor Un.</p>
-                                                                <p className="font-bold text-slate-600">R$ {item.unitPrice.toFixed(2)}</p>
+                                                                <p className="text-[9px] font-black uppercase text-slate-400 mb-1">Custo Un.</p>
+                                                                <p className="font-bold text-slate-600">R$ {Number(item.unitPrice).toFixed(2)}</p>
                                                             </div>
                                                         </div>
                                                         {item.quantity <= item.minStock && (
-                                                            <div className="absolute top-4 right-4 bg-rose-100 text-rose-600 p-2 rounded-xl animate-pulse">
-                                                                <Icon name="alert-triangle" size={14} />
+                                                            <div className="mt-4 bg-amber-50 text-amber-700 text-[10px] font-bold py-2 px-4 rounded-xl flex items-center gap-2">
+                                                                <Icon name="info" size={12} />
+                                                                Estoque abaixo do mínimo ({item.minStock})
                                                             </div>
                                                         )}
                                                     </div>
@@ -292,39 +353,38 @@
                             </div>
                         )}
 
-                        {}
                         {activeTab === 'history' && (
                             <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-500">
                                 <div className="p-8 border-b border-slate-50 flex justify-between items-center">
-                                    <h2 className="text-2xl font-black text-slate-800">Últimos Lançamentos</h2>
-                                    <Icon name="history" className="text-slate-300" />
+                                    <h2 className="text-2xl font-black text-slate-800">Histórico Cloud</h2>
+                                    <Icon name="refresh-ccw" className="text-slate-300 animate-spin-slow" />
                                 </div>
-                                <div className="divide-y divide-slate-50 overflow-x-auto">
-                                    <table className="w-full text-left">
+                                <div className="overflow-x-auto custom-scrollbar">
+                                    <table className="w-full text-left min-w-[700px]">
                                         <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400 tracking-widest">
                                             <tr>
-                                                <th className="px-8 py-4">Data</th>
-                                                <th className="px-8 py-4">Produto</th>
-                                                <th className="px-8 py-4">Tipo</th>
-                                                <th className="px-8 py-4">Detalhes</th>
-                                                <th className="px-8 py-4 text-right">Valor Lançado</th>
+                                                <th className="px-8 py-5">Data/Hora</th>
+                                                <th className="px-8 py-5">Produto</th>
+                                                <th className="px-8 py-5">Ação</th>
+                                                <th className="px-8 py-5">Detalhes da Entrada</th>
+                                                <th className="px-8 py-5 text-right">Valor Total</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="divide-y divide-slate-50 text-sm">
+                                        <tbody className="divide-y divide-slate-50">
                                             {history.map(h => (
-                                                <tr key={h.id} className="hover:bg-slate-50 transition-colors">
-                                                    <td className="px-8 py-5 text-slate-400 font-bold whitespace-nowrap">
-                                                        {h.timestamp?.toDate ? h.timestamp.toDate().toLocaleDateString('pt-BR') : 'Recent'}
+                                                <tr key={h.id} className="hover:bg-slate-50/50 transition-colors">
+                                                    <td className="px-8 py-5 text-slate-400 font-bold text-xs">
+                                                        {h.timestamp?.toDate ? h.timestamp.toDate().toLocaleString('pt-BR') : 'Agora'}
                                                     </td>
                                                     <td className="px-8 py-5 font-black text-slate-700">{h.productName}</td>
                                                     <td className="px-8 py-5">
-                                                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${h.type === 'Ajuste' ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase ${h.type === 'Ajuste' ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'}`}>
                                                             {h.type}
                                                         </span>
                                                     </td>
                                                     <td className="px-8 py-5 text-slate-500 text-xs italic">{h.details}</td>
                                                     <td className="px-8 py-5 text-right font-black text-slate-800">
-                                                        R$ {(h.quantity * h.unitPrice).toFixed(2)}
+                                                        R$ {(h.quantity * h.unitPrice).toLocaleString('pt-BR', {minimumFractionDigits: 2})}
                                                     </td>
                                                 </tr>
                                             ))}
@@ -335,52 +395,54 @@
                         )}
                     </main>
 
-                    {}
                     {isModalOpen && (
-                        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300">
-                            <div className="bg-white rounded-[3rem] shadow-2xl w-full max-w-xl overflow-hidden animate-in zoom-in-95">
-                                <div className="bg-emerald-600 p-8 flex justify-between items-center text-white">
-                                    <h3 className="text-2xl font-black">{editingItem ? 'Editar Produto' : 'Novo Lançamento'}</h3>
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-in fade-in duration-300">
+                            <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-xl overflow-hidden animate-in zoom-in-95">
+                                <div className="bg-emerald-600 p-6 sm:p-8 flex justify-between items-center text-white">
+                                    <div>
+                                        <h3 className="text-xl sm:text-2xl font-black uppercase tracking-tight">{editingItem ? 'Editar Item' : 'Lançar Compra'}</h3>
+                                        <p className="text-emerald-200 text-[10px] font-bold uppercase tracking-widest">Sincronização Ativa</p>
+                                    </div>
                                     <button onClick={() => setIsModalOpen(false)} className="bg-white/20 p-2 rounded-2xl hover:bg-white/30 transition-colors">
                                         <Icon name="x" size={24} />
                                     </button>
                                 </div>
                                 
-                                <form onSubmit={handleSave} className="p-8 space-y-6 max-h-[75vh] overflow-y-auto custom-scrollbar">
-                                    <div className="space-y-4">
+                                <form onSubmit={handleSave} className="p-6 sm:p-8 space-y-6 max-h-[75vh] overflow-y-auto custom-scrollbar">
+                                    <div className="space-y-5">
                                         <div>
-                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Nome do Produto</label>
-                                            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500" placeholder="Ex: Pão de Hambúrguer" />
+                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Descrição do Produto</label>
+                                            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500 transition-all" placeholder="Ex: Pão de Hambúrguer" />
                                         </div>
                                         
                                         <div className="flex bg-slate-100 p-1 rounded-2xl">
-                                            <button type="button" onClick={() => setFormData({...formData, isBoxEntry: false})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${!formData.isBoxEntry ? 'bg-white shadow text-emerald-600' : 'text-slate-400'}`}>Unitário</button>
-                                            <button type="button" onClick={() => setFormData({...formData, isBoxEntry: true})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${formData.isBoxEntry ? 'bg-white shadow text-emerald-600' : 'text-slate-400'}`}>Por Caixa</button>
+                                            <button type="button" onClick={() => setFormData({...formData, isBoxEntry: false})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${!formData.isBoxEntry ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}>Unitário</button>
+                                            <button type="button" onClick={() => setFormData({...formData, isBoxEntry: true})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${formData.isBoxEntry ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}>Por Caixa</button>
                                         </div>
 
                                         {formData.isBoxEntry ? (
                                             <div className="space-y-4 animate-in slide-in-from-top-2">
                                                 <div className="grid grid-cols-2 gap-4">
                                                     <div className="space-y-1">
-                                                        <label className="text-[10px] font-black uppercase text-slate-400">Valor Caixa</label>
-                                                        <input required type="number" step="0.01" value={formData.boxPrice} onChange={e => setFormData({...formData, boxPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
+                                                        <label className="text-[10px] font-black uppercase text-slate-400 ml-1">R$ Valor Caixa</label>
+                                                        <input required type="number" step="0.01" value={formData.boxPrice} onChange={e => setFormData({...formData, boxPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
                                                     </div>
                                                     <div className="space-y-1">
-                                                        <label className="text-[10px] font-black uppercase text-slate-400">Itens/Cx</label>
-                                                        <input required type="number" value={formData.unitsPerBox} onChange={e => setFormData({...formData, unitsPerBox: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
+                                                        <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Un. por Caixa</label>
+                                                        <input required type="number" value={formData.unitsPerBox} onChange={e => setFormData({...formData, unitsPerBox: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
                                                     </div>
                                                 </div>
                                                 <div className="space-y-1">
-                                                    <label className="text-[10px] font-black uppercase text-emerald-600">Qtd de Caixas</label>
-                                                    <input required type="number" value={formData.boxQuantity} onChange={e => setFormData({...formData, boxQuantity: e.target.value})} className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-100 rounded-2xl font-black text-center text-2xl outline-none" />
+                                                    <label className="text-[10px] font-black uppercase text-emerald-600 ml-1">Quantas Caixas Compradas?</label>
+                                                    <input required type="number" value={formData.boxQuantity} onChange={e => setFormData({...formData, boxQuantity: e.target.value})} className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-200 rounded-2xl font-black text-center text-3xl outline-none focus:ring-4 focus:ring-emerald-100" />
                                                 </div>
-                                                <div className="bg-slate-900 rounded-[2rem] p-6 text-white flex justify-between items-center shadow-xl">
+                                                <div className="bg-slate-900 rounded-[2.5rem] p-6 text-white flex justify-between items-center shadow-xl">
                                                     <div>
-                                                        <p className="text-[8px] font-black uppercase text-emerald-400">Custo Unit.</p>
+                                                        <p className="text-[9px] font-black uppercase text-emerald-400">Preço p/ Un.</p>
                                                         <p className="text-2xl font-black">R$ {formData.unitPrice.toFixed(2)}</p>
                                                     </div>
                                                     <div className="text-right">
-                                                        <p className="text-[8px] font-black uppercase text-emerald-400">Total Unidades</p>
+                                                        <p className="text-[9px] font-black uppercase text-emerald-400">Total Unidades</p>
                                                         <p className="text-2xl font-black text-emerald-400">{formData.quantity}</p>
                                                     </div>
                                                 </div>
@@ -388,48 +450,44 @@
                                         ) : (
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div>
-                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Preço Unitário</label>
-                                                    <input required type="number" step="0.01" value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
+                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Preço Un.</label>
+                                                    <input required type="number" step="0.01" value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
                                                 </div>
                                                 <div>
-                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Qtd Atual</label>
-                                                    <input required type="number" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
+                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Estoque Físico</label>
+                                                    <input required type="number" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
                                                 </div>
                                             </div>
                                         )}
 
-                                        <div className="grid grid-cols-2 gap-4 pt-2">
+                                        <div className="grid grid-cols-2 gap-4">
                                             <div>
-                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Mín. Alerta</label>
-                                                <input required type="number" value={formData.minStock} onChange={e => setFormData({...formData, minStock: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
+                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Alerta Mínimo</label>
+                                                <input required type="number" value={formData.minStock} onChange={e => setFormData({...formData, minStock: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-rose-300" />
                                             </div>
                                             <div>
-                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Família (Categoria)</label>
+                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Família</label>
                                                 {!showNewCategoryInput ? (
-                                                    <div className="flex gap-2">
-                                                        <select 
-                                                            value={formData.category} 
-                                                            onChange={e => {
-                                                                if(e.target.value === 'NEW') {
-                                                                    setShowNewCategoryInput(true);
-                                                                } else {
-                                                                    setFormData({...formData, category: e.target.value});
-                                                                }
-                                                            }} 
-                                                            className="flex-1 px-4 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500"
-                                                        >
-                                                            {existingCategories.map(cat => (
-                                                                <option key={cat} value={cat}>{cat}</option>
-                                                            ))}
-                                                            <option value="NEW" className="text-emerald-600 font-bold">+ Nova Categoria...</option>
-                                                        </select>
-                                                    </div>
+                                                    <select 
+                                                        value={formData.category} 
+                                                        onChange={e => {
+                                                            if(e.target.value === 'NEW') setShowNewCategoryInput(true);
+                                                            else setFormData({...formData, category: e.target.value});
+                                                        }} 
+                                                        className="w-full px-4 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500"
+                                                    >
+                                                        {existingCategories.length === 0 && <option value="Padaria">Padaria</option>}
+                                                        {existingCategories.map(cat => (
+                                                            <option key={cat} value={cat}>{cat}</option>
+                                                        ))}
+                                                        <option value="NEW" className="text-emerald-600 font-bold">+ Nova Família...</option>
+                                                    </select>
                                                 ) : (
                                                     <div className="relative">
                                                         <input 
                                                             autoFocus
                                                             type="text" 
-                                                            placeholder="Nome da Categoria"
+                                                            placeholder="Nova Família"
                                                             value={newCategoryName}
                                                             onChange={e => setNewCategoryName(e.target.value)}
                                                             className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-200 rounded-2xl font-bold outline-none"
@@ -437,9 +495,9 @@
                                                         <button 
                                                             type="button"
                                                             onClick={() => setShowNewCategoryInput(false)}
-                                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-rose-500 uppercase px-2"
+                                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] font-black text-rose-500 uppercase px-2"
                                                         >
-                                                            Cancelar
+                                                            Sair
                                                         </button>
                                                     </div>
                                                 )}
@@ -447,11 +505,14 @@
                                         </div>
                                         
                                         <div>
-                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">WhatsApp p/ Reposição (DDD + Número)</label>
-                                            <input type="text" value={formData.whatsappContact} onChange={e => setFormData({...formData, whatsappContact: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none" placeholder="5511999999999" />
+                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">WhatsApp de Reposição</label>
+                                            <div className="relative">
+                                                <Icon name="phone" className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
+                                                <input type="text" value={formData.whatsappContact} onChange={e => setFormData({...formData, whatsappContact: e.target.value})} className="w-full px-14 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500" placeholder="5511999999999" />
+                                            </div>
                                         </div>
                                     </div>
-                                    <button type="submit" className="w-full bg-emerald-600 text-white font-black py-5 rounded-[2rem] shadow-xl hover:bg-emerald-700 active:scale-95 transition-all text-sm uppercase tracking-widest">Confirmar Lançamento Cloud</button>
+                                    <button type="submit" className="w-full bg-emerald-600 text-white font-black py-5 rounded-[2rem] shadow-2xl shadow-emerald-100 hover:bg-emerald-700 active:scale-[0.98] transition-all text-xs uppercase tracking-widest mt-4">Confirmar Lançamento</button>
                                 </form>
                             </div>
                         </div>
