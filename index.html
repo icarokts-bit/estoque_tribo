@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tribo Estoque - Cloud v2.2</title>
+    <title>Tribo Estoque - Cloud v2.4</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -74,8 +74,7 @@
 
             const [formData, setFormData] = useState({
                 name: '', category: 'Padaria', quantity: 0, minStock: 5, unitPrice: 0,
-                isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1,
-                whatsappContact: '55'
+                isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1
             });
 
             const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
@@ -85,7 +84,6 @@
             useEffect(() => {
                 const initSync = async () => {
                     if (!window.fbSDK) return;
-                    // FIX: Adicionado 'limit' na desestruturação abaixo
                     const { db, auth, collection, onSnapshot, query, orderBy, limit, signInAnonymously } = window.fbSDK;
                     
                     try {
@@ -106,7 +104,7 @@
 
                         return () => { unsubInv(); unsubHist(); };
                     } catch (err) {
-                        console.error("Firebase Error:", err);
+                        console.error("Erro Firebase:", err);
                         setLoading(false);
                     }
                 };
@@ -149,77 +147,82 @@
                 const newQty = Number(formData.quantity);
                 const newPrice = Number(formData.unitPrice);
 
-                // Verificar se o item já existe pelo nome (case-insensitive) para fazer o Preço Médio
                 const existingItem = inventory.find(i => i.name.toLowerCase().trim() === formData.name.toLowerCase().trim());
 
                 try {
                     let docId;
-                    let finalQty = newQty;
-                    let finalPrice = newPrice;
-                    let actionType = editingItem ? 'Ajuste' : 'Nova Compra';
+                    let actionType = editingItem ? 'Ajuste de Cadastro' : 'Nova Compra';
 
-                    // Se for uma nova compra de um item que já existe, fazemos a média
                     if (!editingItem && existingItem) {
                         const currentTotalValue = existingItem.quantity * existingItem.unitPrice;
                         const newEntryValue = newQty * newPrice;
-                        finalQty = existingItem.quantity + newQty;
-                        finalPrice = (currentTotalValue + newEntryValue) / finalQty;
+                        const finalQty = existingItem.quantity + newQty;
+                        const finalPrice = (currentTotalValue + newEntryValue) / finalQty;
                         
                         await updateDoc(doc(db, "inventory", existingItem.id), {
                             quantity: finalQty,
                             unitPrice: finalPrice,
                             lastUpdate: new Date().toISOString(),
-                            category: finalCategory // Atualiza categoria caso mude
+                            category: finalCategory
                         });
                         docId = existingItem.id;
-                        actionType = 'Nova Compra (Média)';
+                        actionType = 'Compra (Média)';
                     } else if (editingItem) {
-                        // Se for edição manual, apenas atualiza
                         await updateDoc(doc(db, "inventory", editingItem.id), {
                             name: formData.name,
                             category: finalCategory,
                             quantity: newQty,
                             unitPrice: newPrice,
                             minStock: Number(formData.minStock),
-                            whatsappContact: formData.whatsappContact,
                             lastUpdate: new Date().toISOString()
                         });
                         docId = editingItem.id;
                     } else {
-                        // Novo item absoluto
                         const newDoc = await addDoc(collection(db, "inventory"), {
                             name: formData.name,
                             category: finalCategory,
                             quantity: newQty,
                             minStock: Number(formData.minStock),
                             unitPrice: newPrice,
-                            whatsappContact: formData.whatsappContact,
                             lastUpdate: new Date().toISOString()
                         });
                         docId = newDoc.id;
                     }
 
-                    const histDetails = formData.isBoxEntry 
-                        ? `${formData.boxQuantity} cx de ${formData.unitsPerBox}un (R$ ${formData.boxPrice} cada caixa)`
-                        : 'Lançamento unitário direto';
+                    if (!editingItem || (editingItem && formData.quantity !== editingItem.quantity)) {
+                        const histDetails = formData.isBoxEntry 
+                            ? `${formData.boxQuantity} cx de ${formData.unitsPerBox}un (R$ ${formData.boxPrice} p/ cx)`
+                            : 'Lançamento manual de stock';
 
-                    await addDoc(collection(db, "history"), {
-                        productId: docId,
-                        productName: formData.name,
-                        type: actionType,
-                        quantity: newQty, // Registra o quanto foi adicionado agora
-                        unitPrice: newPrice, // Registra o preço pago agora
-                        timestamp: serverTimestamp(),
-                        details: histDetails
-                    });
+                        await addDoc(collection(db, "history"), {
+                            productId: docId,
+                            productName: formData.name,
+                            type: actionType,
+                            quantity: editingItem ? (newQty - editingItem.quantity) : newQty, 
+                            unitPrice: newPrice,
+                            timestamp: serverTimestamp(),
+                            details: histDetails
+                        });
+                    }
 
-                    showToast(editingItem ? "Atualizado!" : (existingItem ? "Média Calculada e Salva!" : "Novo Item Cadastrado!"));
+                    showToast(editingItem ? "Dados atualizados!" : "Stock atualizado com sucesso!");
                     setIsModalOpen(false);
                     setShowNewCategoryInput(false);
                     setNewCategoryName('');
                 } catch (err) { 
                     console.error(err);
-                    showToast("Erro ao salvar", "error"); 
+                    showToast("Erro ao guardar dados", "error"); 
+                }
+            };
+
+            const handleDelete = async (id) => {
+                if (!confirm("Tem a certeza que deseja excluir este produto do catálogo?")) return;
+                const { db, deleteDoc, doc } = window.fbSDK;
+                try {
+                    await deleteDoc(doc(db, "inventory", id));
+                    showToast("Produto removido!");
+                } catch (err) {
+                    showToast("Erro ao remover", "error");
                 }
             };
 
@@ -239,12 +242,6 @@
                 return Array.from(cats).sort();
             }, [inventory]);
 
-            const sendWhatsApp = (item) => {
-                const msg = `🚨 *Alerta de Estoque - Tribo*%0A*Produto:* ${item.name}%0A*Quantidade Atual:* ${item.quantity} unidades%0A*Status:* Abaixo do mínimo (${item.minStock}). Favor providenciar reposição.`;
-                window.open(`https://wa.me/${item.whatsappContact}?text=${msg}`, '_blank');
-            };
-
-            // Filtrar histórico para o item sendo editado/lançado
             const itemHistory = useMemo(() => {
                 if (!formData.name) return [];
                 return history.filter(h => h.productName.toLowerCase().includes(formData.name.toLowerCase())).slice(0, 3);
@@ -253,7 +250,7 @@
             if (loading) return (
                 <div className="flex h-screen items-center justify-center flex-col gap-4 bg-slate-50">
                     <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="font-bold text-emerald-800 animate-pulse text-xs uppercase tracking-widest">Sincronizando Tribo Cloud...</p>
+                    <p className="font-bold text-emerald-800 animate-pulse text-xs uppercase tracking-widest text-center">A carregar dados da Tribo...</p>
                 </div>
             );
 
@@ -267,23 +264,24 @@
                     )}
 
                     <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 px-6 py-4">
-                        <div className="max-w-7xl mx-auto flex justify-between items-center">
+                        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex items-center gap-3">
                                 <div className="bg-emerald-600 p-2.5 rounded-2xl text-white shadow-lg"><Icon name="package" size={24} /></div>
-                                <div className="hidden sm:block">
-                                    <h1 className="text-xl font-black text-slate-800 uppercase">Tribo Estoque</h1>
-                                    <p className="text-[8px] font-black text-emerald-600 tracking-widest uppercase">Cloud Live v2.2</p>
+                                <div>
+                                    <h1 className="text-xl font-black text-slate-800 uppercase leading-none">Tribo Estoque</h1>
+                                    <p className="text-[8px] font-black text-emerald-600 tracking-widest uppercase mt-1">Gestão de Inventário</p>
                                 </div>
                             </div>
-                            <div className="flex gap-2">
-                                <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'dashboard' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>Painel</button>
-                                <button onClick={() => setActiveTab('inventory_list')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'inventory_list' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>Estoque</button>
-                                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'history' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>Histórico</button>
+                            <div className="flex flex-wrap justify-center gap-1 md:gap-2">
+                                <button onClick={() => setActiveTab('dashboard')} className={`px-3 md:px-4 py-2 rounded-xl font-bold text-xs transition-all ${activeTab === 'dashboard' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Painel</button>
+                                <button onClick={() => setActiveTab('inventory_list')} className={`px-3 md:px-4 py-2 rounded-xl font-bold text-xs transition-all ${activeTab === 'inventory_list' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Estoque</button>
+                                <button onClick={() => setActiveTab('products_mgmt')} className={`px-3 md:px-4 py-2 rounded-xl font-bold text-xs transition-all ${activeTab === 'products_mgmt' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Produtos</button>
+                                <button onClick={() => setActiveTab('history')} className={`px-3 md:px-4 py-2 rounded-xl font-bold text-xs transition-all ${activeTab === 'history' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Histórico</button>
                                 <button onClick={() => { 
                                     setEditingItem(null); 
-                                    setFormData({name: '', category: existingCategories[0] || 'Padaria', quantity: 0, minStock: 5, unitPrice: 0, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1, whatsappContact: '55'}); 
+                                    setFormData({name: '', category: existingCategories[0] || 'Padaria', quantity: 0, minStock: 5, unitPrice: 0, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1}); 
                                     setIsModalOpen(true); 
-                                }} className="bg-emerald-600 text-white px-4 sm:px-6 py-2 rounded-xl font-bold shadow-lg shadow-emerald-100 active:scale-95 transition-all text-xs sm:text-sm uppercase">+ Comprar</button>
+                                }} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold shadow-lg shadow-emerald-100 active:scale-95 transition-all text-[10px] uppercase">+ Compra</button>
                             </div>
                         </div>
                     </nav>
@@ -292,30 +290,30 @@
                         {activeTab === 'dashboard' && (
                             <div className="space-y-8 animate-in fade-in duration-500">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group hover:border-emerald-200 transition-all">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Patrimônio Total</p>
+                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Valor do Inventário</p>
                                         <p className="text-4xl font-black text-slate-800">R$ {metrics.totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                                     </div>
-                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group hover:border-amber-200 transition-all">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Itens p/ Reposição</p>
+                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Stock Baixo</p>
                                         <p className="text-4xl font-black text-amber-500">{metrics.lowStockCount}</p>
                                     </div>
-                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group hover:border-rose-200 transition-all">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Parado (+14 dias)</p>
+                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Sem Giro (+14d)</p>
                                         <p className="text-4xl font-black text-rose-500">{metrics.stagnantCount}</p>
                                     </div>
                                 </div>
                                 
                                 {metrics.lowStockCount > 0 && (
                                     <div className="bg-amber-50 border-2 border-amber-100 rounded-[2rem] p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-                                        <div className="flex items-center gap-4 text-center sm:text-left">
+                                        <div className="flex items-center gap-4">
                                             <div className="bg-amber-500 text-white p-3 rounded-2xl animate-bounce"><Icon name="alert-circle" /></div>
                                             <div>
-                                                <h4 className="font-black text-amber-900">Alerta de Reposição</h4>
-                                                <p className="text-amber-700 text-sm">Existem {metrics.lowStockCount} produtos chegando ao fim.</p>
+                                                <h4 className="font-black text-amber-900">Itens em Alerta</h4>
+                                                <p className="text-amber-700 text-sm">{metrics.lowStockCount} produtos precisam de atenção imediata.</p>
                                             </div>
                                         </div>
-                                        <button onClick={() => setActiveTab('inventory_list')} className="w-full sm:w-auto bg-amber-500 text-white px-8 py-3 rounded-xl font-bold text-sm shadow-lg shadow-amber-100 active:scale-95 transition-all">Ver Lista</button>
+                                        <button onClick={() => setActiveTab('inventory_list')} className="w-full sm:w-auto bg-amber-500 text-white px-8 py-3 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all">Ver Estoque</button>
                                     </div>
                                 )}
                             </div>
@@ -324,10 +322,10 @@
                         {activeTab === 'inventory_list' && (
                             <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
                                 <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-                                    <h2 className="text-3xl font-black text-slate-800">Estoque por Família</h2>
+                                    <h2 className="text-3xl font-black text-slate-800">Visão por Família</h2>
                                     <div className="relative w-full md:w-80">
                                         <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                                        <input type="text" placeholder="Buscar produto..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="bg-white border border-slate-200 pl-12 pr-6 py-3 rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500 w-full font-bold shadow-sm" />
+                                        <input type="text" placeholder="Filtrar produtos..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="bg-white border border-slate-200 pl-12 pr-6 py-3 rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500 w-full font-bold shadow-sm" />
                                     </div>
                                 </div>
 
@@ -336,52 +334,31 @@
                                     if (itemsInCat.length === 0) return null;
                                     return (
                                         <div key={cat} className="space-y-4">
-                                            <div className="flex items-center gap-3 ml-2">
-                                                <div className="h-2 w-2 bg-emerald-500 rounded-full"></div>
-                                                <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-400">{cat}</h3>
+                                            <div className="flex items-center gap-3">
+                                                <h3 className="text-xs font-black uppercase tracking-widest text-slate-400">{cat}</h3>
                                                 <div className="flex-1 h-px bg-slate-100"></div>
                                             </div>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                                                 {itemsInCat.map(item => (
-                                                    <div key={item.id} className={`bg-white p-6 rounded-[2rem] border transition-all group relative ${item.quantity <= item.minStock ? 'border-amber-200 shadow-md shadow-amber-50' : 'border-slate-100 shadow-sm hover:shadow-md'}`}>
+                                                    <div key={item.id} className={`bg-white p-6 rounded-[2rem] border transition-all relative ${item.quantity <= item.minStock ? 'border-amber-200 shadow-md' : 'border-slate-100 shadow-sm'}`}>
                                                         <div className="flex justify-between items-start mb-4">
-                                                            <div className="pr-10">
+                                                            <div>
                                                                 <h4 className="font-black text-slate-800 text-lg leading-tight">{item.name}</h4>
-                                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{item.category}</p>
-                                                            </div>
-                                                            <div className="absolute top-6 right-6 flex gap-2">
-                                                                {item.quantity <= item.minStock && (
-                                                                    <button onClick={() => sendWhatsApp(item)} className="text-emerald-500 hover:scale-110 transition-transform">
-                                                                        <Icon name="message-circle" size={20} />
-                                                                    </button>
-                                                                )}
-                                                                <button onClick={() => { 
-                                                                    setEditingItem(item); 
-                                                                    setFormData({ ...item, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1 }); 
-                                                                    setIsModalOpen(true); 
-                                                                }} className="text-slate-300 hover:text-emerald-600 transition-colors">
-                                                                    <Icon name="edit-3" size={20} />
-                                                                </button>
+                                                                <p className="text-[10px] font-bold text-slate-400 uppercase">{item.category}</p>
                                                             </div>
                                                         </div>
                                                         <div className="flex justify-between items-end">
                                                             <div>
-                                                                <p className="text-[9px] font-black uppercase text-slate-400 mb-1">Disponível</p>
+                                                                <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Disponível</p>
                                                                 <div className={`text-3xl font-black ${item.quantity <= item.minStock ? 'text-rose-500' : 'text-slate-800'}`}>
-                                                                    {item.quantity} <span className="text-xs opacity-40 font-bold uppercase">un</span>
+                                                                    {item.quantity} <span className="text-xs opacity-40">un</span>
                                                                 </div>
                                                             </div>
                                                             <div className="text-right">
-                                                                <p className="text-[9px] font-black uppercase text-slate-400 mb-1">Custo Médio</p>
+                                                                <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Custo Médio</p>
                                                                 <p className="font-bold text-slate-600">R$ {Number(item.unitPrice).toFixed(2)}</p>
                                                             </div>
                                                         </div>
-                                                        {item.quantity <= item.minStock && (
-                                                            <div className="mt-4 bg-amber-50 text-amber-700 text-[10px] font-bold py-2 px-4 rounded-xl flex items-center gap-2">
-                                                                <Icon name="info" size={12} />
-                                                                Estoque abaixo do mínimo ({item.minStock})
-                                                            </div>
-                                                        )}
                                                     </div>
                                                 ))}
                                             </div>
@@ -391,38 +368,80 @@
                             </div>
                         )}
 
+                        {activeTab === 'products_mgmt' && (
+                            <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-500">
+                                <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
+                                    <h2 className="text-2xl font-black text-slate-800">Cadastro de Itens</h2>
+                                    <button onClick={() => { 
+                                        setEditingItem(null); 
+                                        setFormData({name: '', category: existingCategories[0] || 'Padaria', quantity: 0, minStock: 5, unitPrice: 0, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1}); 
+                                        setIsModalOpen(true); 
+                                    }} className="text-xs font-black uppercase text-emerald-600 flex items-center gap-2 hover:bg-emerald-50 px-4 py-2 rounded-xl transition-all">
+                                        <Icon name="plus" size={16} /> Novo Produto
+                                    </button>
+                                </div>
+                                <div className="overflow-x-auto custom-scrollbar">
+                                    <table className="w-full text-left min-w-[800px]">
+                                        <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
+                                            <tr>
+                                                <th className="px-8 py-5">Produto</th>
+                                                <th className="px-8 py-5">Família</th>
+                                                <th className="px-8 py-5">Stock Mín.</th>
+                                                <th className="px-8 py-5 text-right">Ações</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-50">
+                                            {inventory.sort((a,b) => a.name.localeCompare(b.name)).map(item => (
+                                                <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
+                                                    <td className="px-8 py-5 font-black text-slate-700">{item.name}</td>
+                                                    <td className="px-8 py-5 text-xs text-slate-500 font-bold uppercase">{item.category}</td>
+                                                    <td className="px-8 py-5 text-xs text-slate-500 font-bold">{item.minStock} un</td>
+                                                    <td className="px-8 py-5 text-right">
+                                                        <div className="flex justify-end gap-3 opacity-30 group-hover:opacity-100 transition-all">
+                                                            <button onClick={() => { setEditingItem(item); setFormData({...item, isBoxEntry: false}); setIsModalOpen(true); }} className="text-emerald-600 hover:bg-emerald-50 p-2 rounded-lg"><Icon name="edit" size={16} /></button>
+                                                            <button onClick={() => handleDelete(item.id)} className="text-rose-500 hover:bg-rose-50 p-2 rounded-lg"><Icon name="trash-2" size={16} /></button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
                         {activeTab === 'history' && (
                             <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-500">
                                 <div className="p-8 border-b border-slate-50 flex justify-between items-center">
-                                    <h2 className="text-2xl font-black text-slate-800">Histórico Cloud</h2>
-                                    <Icon name="refresh-ccw" className="text-slate-300 animate-spin-slow" />
+                                    <h2 className="text-2xl font-black text-slate-800">Movimentações Cloud</h2>
+                                    <Icon name="refresh-ccw" className="text-slate-300" size={18} />
                                 </div>
                                 <div className="overflow-x-auto custom-scrollbar">
                                     <table className="w-full text-left min-w-[700px]">
-                                        <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400 tracking-widest">
+                                        <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
                                             <tr>
                                                 <th className="px-8 py-5">Data/Hora</th>
                                                 <th className="px-8 py-5">Produto</th>
-                                                <th className="px-8 py-5">Ação</th>
-                                                <th className="px-8 py-5">Detalhes da Entrada</th>
-                                                <th className="px-8 py-5 text-right">Valor Pago</th>
+                                                <th className="px-8 py-5">Tipo</th>
+                                                <th className="px-8 py-5">Detalhes</th>
+                                                <th className="px-8 py-5 text-right">Valor un.</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-50">
                                             {history.map(h => (
-                                                <tr key={h.id} className="hover:bg-slate-50/50 transition-colors">
+                                                <tr key={h.id} className="hover:bg-slate-50/50">
                                                     <td className="px-8 py-5 text-slate-400 font-bold text-xs">
-                                                        {h.timestamp?.toDate ? h.timestamp.toDate().toLocaleString('pt-BR') : 'Agora'}
+                                                        {h.timestamp?.toDate ? h.timestamp.toDate().toLocaleString('pt-BR') : 'A carregar...'}
                                                     </td>
                                                     <td className="px-8 py-5 font-black text-slate-700">{h.productName}</td>
                                                     <td className="px-8 py-5">
-                                                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase ${h.type.includes('Média') ? 'bg-blue-100 text-blue-600' : h.type === 'Ajuste' ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                                        <span className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase ${h.type.includes('Compra') ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
                                                             {h.type}
                                                         </span>
                                                     </td>
                                                     <td className="px-8 py-5 text-slate-500 text-xs italic">{h.details}</td>
-                                                    <td className="px-8 py-5 text-right font-black text-slate-800">
-                                                        R$ {Number(h.unitPrice).toLocaleString('pt-BR', {minimumFractionDigits: 2})} <span className="text-[10px] text-slate-400 font-normal">/un</span>
+                                                    <td className="px-8 py-5 text-right font-black text-slate-800 text-xs">
+                                                        R$ {Number(h.unitPrice).toFixed(2)}
                                                     </td>
                                                 </tr>
                                             ))}
@@ -434,136 +453,107 @@
                     </main>
 
                     {isModalOpen && (
-                        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-in fade-in duration-300">
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in">
                             <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-xl overflow-hidden animate-in zoom-in-95">
-                                <div className="bg-emerald-600 p-6 sm:p-8 flex justify-between items-center text-white">
+                                <div className="bg-emerald-600 p-6 md:p-8 flex justify-between items-center text-white">
                                     <div>
-                                        <h3 className="text-xl sm:text-2xl font-black uppercase tracking-tight">{editingItem ? 'Editar Item' : 'Lançar Compra'}</h3>
-                                        <p className="text-emerald-200 text-[10px] font-bold uppercase tracking-widest">Inteligência de Preço Médio</p>
+                                        <h3 className="text-xl md:text-2xl font-black uppercase">{editingItem ? 'Editar Cadastro' : 'Lançar Compra'}</h3>
+                                        <p className="text-emerald-200 text-[10px] font-bold uppercase tracking-widest mt-1">Sincronização Cloud Ativa</p>
                                     </div>
-                                    <button onClick={() => setIsModalOpen(false)} className="bg-white/20 p-2 rounded-2xl hover:bg-white/30 transition-colors">
-                                        <Icon name="x" size={24} />
-                                    </button>
+                                    <button onClick={() => setIsModalOpen(false)} className="bg-white/20 p-2 rounded-xl hover:bg-white/30"><Icon name="x" size={20} /></button>
                                 </div>
                                 
-                                <form onSubmit={handleSave} className="p-6 sm:p-8 space-y-6 max-h-[75vh] overflow-y-auto custom-scrollbar">
-                                    <div className="space-y-5">
+                                <form onSubmit={handleSave} className="p-6 md:p-8 space-y-6 max-h-[75vh] overflow-y-auto custom-scrollbar">
+                                    <div className="space-y-4">
                                         <div>
-                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Descrição do Produto</label>
-                                            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500 transition-all" placeholder="Ex: Pão de Hambúrguer" />
-                                            
-                                            {itemHistory.length > 0 && !editingItem && (
-                                                <div className="mt-3 bg-slate-100 p-3 rounded-xl border border-slate-200 animate-in fade-in">
-                                                    <p className="text-[9px] font-black uppercase text-slate-400 mb-2">Últimos preços pagos por este item:</p>
-                                                    <div className="flex flex-wrap gap-2">
-                                                        {itemHistory.map((h, idx) => (
-                                                            <div key={idx} className="bg-white px-2 py-1 rounded-md text-[10px] font-bold border border-slate-200">
-                                                                R$ {h.unitPrice.toFixed(2)} <span className="text-slate-300 text-[8px]">{h.timestamp?.toDate ? h.timestamp.toDate().toLocaleDateString('pt-BR') : ''}</span>
-                                                            </div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Descrição</label>
+                                            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500" placeholder="Nome do produto" />
+                                            {!editingItem && itemHistory.length > 0 && (
+                                                <div className="mt-2 bg-slate-100 p-3 rounded-xl border border-slate-200">
+                                                    <p className="text-[8px] font-black uppercase text-slate-400 mb-1">Últimos preços registados:</p>
+                                                    <div className="flex gap-2">
+                                                        {itemHistory.map((h, i) => (
+                                                            <span key={i} className="bg-white px-2 py-1 rounded text-[9px] font-bold border border-slate-200 text-slate-600">R$ {h.unitPrice.toFixed(2)}</span>
                                                         ))}
                                                     </div>
                                                 </div>
                                             )}
                                         </div>
                                         
-                                        <div className="flex bg-slate-100 p-1 rounded-2xl">
-                                            <button type="button" onClick={() => setFormData({...formData, isBoxEntry: false})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${!formData.isBoxEntry ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}>Unitário</button>
-                                            <button type="button" onClick={() => setFormData({...formData, isBoxEntry: true})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${formData.isBoxEntry ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}>Por Caixa</button>
-                                        </div>
+                                        {!editingItem && (
+                                            <div className="flex bg-slate-100 p-1 rounded-2xl">
+                                                <button type="button" onClick={() => setFormData({...formData, isBoxEntry: false})} className={`flex-1 py-2.5 text-[9px] font-black uppercase rounded-xl transition-all ${!formData.isBoxEntry ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}>Simples</button>
+                                                <button type="button" onClick={() => setFormData({...formData, isBoxEntry: true})} className={`flex-1 py-2.5 text-[9px] font-black uppercase rounded-xl transition-all ${formData.isBoxEntry ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}>Por Caixa</button>
+                                            </div>
+                                        )}
 
                                         {formData.isBoxEntry ? (
-                                            <div className="space-y-4 animate-in slide-in-from-top-2">
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div className="space-y-1">
-                                                        <label className="text-[10px] font-black uppercase text-slate-400 ml-1">R$ Valor Caixa</label>
-                                                        <input required type="number" step="0.01" value={formData.boxPrice} onChange={e => setFormData({...formData, boxPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
-                                                    </div>
-                                                    <div className="space-y-1">
-                                                        <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Un. por Caixa</label>
-                                                        <input required type="number" value={formData.unitsPerBox} onChange={e => setFormData({...formData, unitsPerBox: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
-                                                    </div>
-                                                </div>
-                                                <div className="space-y-1">
-                                                    <label className="text-[10px] font-black uppercase text-emerald-600 ml-1">Quantas Caixas Chegaram?</label>
-                                                    <input required type="number" value={formData.boxQuantity} onChange={e => setFormData({...formData, boxQuantity: e.target.value})} className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-200 rounded-2xl font-black text-center text-3xl outline-none focus:ring-4 focus:ring-emerald-100" />
-                                                </div>
-                                                <div className="bg-slate-900 rounded-[2.5rem] p-6 text-white flex justify-between items-center shadow-xl">
+                                            <div className="space-y-4 p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100 animate-in slide-in-from-top-2">
+                                                <div className="grid grid-cols-2 gap-3">
                                                     <div>
-                                                        <p className="text-[9px] font-black uppercase text-emerald-400">Novo Custo Un.</p>
-                                                        <p className="text-2xl font-black">R$ {formData.unitPrice.toFixed(2)}</p>
+                                                        <label className="text-[9px] font-black uppercase text-slate-400 ml-1">R$ Valor Caixa</label>
+                                                        <input required type="number" step="0.01" value={formData.boxPrice} onChange={e => setFormData({...formData, boxPrice: e.target.value})} className="w-full px-5 py-3 bg-white rounded-xl font-bold border-2 border-transparent focus:border-emerald-500 shadow-sm" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[9px] font-black uppercase text-slate-400 ml-1">Un. por Caixa</label>
+                                                        <input required type="number" value={formData.unitsPerBox} onChange={e => setFormData({...formData, unitsPerBox: e.target.value})} className="w-full px-5 py-3 bg-white rounded-xl font-bold border-2 border-transparent focus:border-emerald-500 shadow-sm" />
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label className="text-[9px] font-black uppercase text-emerald-600 ml-1">Quantas Caixas?</label>
+                                                    <input required type="number" value={formData.boxQuantity} onChange={e => setFormData({...formData, boxQuantity: e.target.value})} className="w-full px-5 py-3 bg-white border-2 border-emerald-200 rounded-xl font-black text-center text-3xl outline-none" />
+                                                </div>
+                                                <div className="bg-slate-900 rounded-2xl p-4 text-white flex justify-between items-center">
+                                                    <div>
+                                                        <p className="text-[8px] font-black uppercase text-emerald-400">Custo Un.</p>
+                                                        <p className="text-xl font-black">R$ {formData.unitPrice.toFixed(2)}</p>
                                                     </div>
                                                     <div className="text-right">
-                                                        <p className="text-[9px] font-black uppercase text-emerald-400">Total Unidades</p>
-                                                        <p className="text-2xl font-black text-emerald-400">{formData.quantity}</p>
+                                                        <p className="text-[8px] font-black uppercase text-emerald-400">Total Unidades</p>
+                                                        <p className="text-xl font-black text-emerald-400">{formData.quantity}</p>
                                                     </div>
                                                 </div>
                                             </div>
                                         ) : (
-                                            <div className="grid grid-cols-2 gap-4">
+                                            <div className="grid grid-cols-2 gap-3">
                                                 <div>
-                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Preço Un.</label>
-                                                    <input required type="number" step="0.01" value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
+                                                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Preço Unitário</label>
+                                                    <input required type="number" step="0.01" value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
                                                 </div>
                                                 <div>
-                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">{editingItem ? 'Estoque Atual' : 'Quantidade'}</label>
-                                                    <input required type="number" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
+                                                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">{editingItem ? 'Qtd. Atual' : 'Adicionar Qtd.'}</label>
+                                                    <input required type="number" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
                                                 </div>
                                             </div>
                                         )}
 
-                                        <div className="grid grid-cols-2 gap-4">
+                                        <div className="grid grid-cols-2 gap-3">
                                             <div>
-                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Alerta Mínimo</label>
-                                                <input required type="number" value={formData.minStock} onChange={e => setFormData({...formData, minStock: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-rose-300" />
+                                                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Stock Mínimo</label>
+                                                <input required type="number" value={formData.minStock} onChange={e => setFormData({...formData, minStock: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-rose-300" />
                                             </div>
                                             <div>
-                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Família</label>
+                                                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Família</label>
                                                 {!showNewCategoryInput ? (
                                                     <select 
                                                         value={formData.category} 
-                                                        onChange={e => {
-                                                            if(e.target.value === 'NEW') setShowNewCategoryInput(true);
-                                                            else setFormData({...formData, category: e.target.value});
-                                                        }} 
-                                                        className="w-full px-4 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500"
+                                                        onChange={e => e.target.value === 'NEW' ? setShowNewCategoryInput(true) : setFormData({...formData, category: e.target.value})} 
+                                                        className="w-full px-4 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500"
                                                     >
                                                         {existingCategories.length === 0 && <option value="Padaria">Padaria</option>}
-                                                        {existingCategories.map(cat => (
-                                                            <option key={cat} value={cat}>{cat}</option>
-                                                        ))}
+                                                        {existingCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                                                         <option value="NEW" className="text-emerald-600 font-bold">+ Nova Família...</option>
                                                     </select>
                                                 ) : (
                                                     <div className="relative">
-                                                        <input 
-                                                            autoFocus
-                                                            type="text" 
-                                                            placeholder="Nova Família"
-                                                            value={newCategoryName}
-                                                            onChange={e => setNewCategoryName(e.target.value)}
-                                                            className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-200 rounded-2xl font-bold outline-none"
-                                                        />
-                                                        <button 
-                                                            type="button"
-                                                            onClick={() => setShowNewCategoryInput(false)}
-                                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] font-black text-rose-500 uppercase px-2"
-                                                        >
-                                                            Sair
-                                                        </button>
+                                                        <input autoFocus type="text" placeholder="Nova Família" value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} className="w-full px-5 py-3 bg-emerald-50 border-2 border-emerald-200 rounded-2xl font-bold outline-none" />
+                                                        <button type="button" onClick={() => setShowNewCategoryInput(false)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] font-black text-rose-500 uppercase">X</button>
                                                     </div>
                                                 )}
                                             </div>
                                         </div>
-                                        
-                                        <div>
-                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">WhatsApp de Reposição</label>
-                                            <div className="relative">
-                                                <Icon name="phone" className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
-                                                <input type="text" value={formData.whatsappContact} onChange={e => setFormData({...formData, whatsappContact: e.target.value})} className="w-full px-14 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500" placeholder="5511999999999" />
-                                            </div>
-                                        </div>
                                     </div>
-                                    <button type="submit" className="w-full bg-emerald-600 text-white font-black py-5 rounded-[2rem] shadow-2xl shadow-emerald-100 hover:bg-emerald-700 active:scale-[0.98] transition-all text-xs uppercase tracking-widest mt-4">Confirmar e Atualizar Estoque</button>
+                                    <button type="submit" className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl shadow-xl shadow-emerald-100 hover:bg-emerald-700 active:scale-[0.98] transition-all text-[10px] uppercase tracking-widest mt-4">Guardar e Sincronizar</button>
                                 </form>
                             </div>
                         </div>
