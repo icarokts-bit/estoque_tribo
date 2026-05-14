@@ -14,17 +14,8 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { 
-            getFirestore, 
-            collection, 
-            addDoc, 
-            updateDoc, 
-            deleteDoc, 
-            doc, 
-            onSnapshot, 
-            query, 
-            orderBy,
-            limit,
-            serverTimestamp 
+            getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, 
+            onSnapshot, query, orderBy, limit, serverTimestamp 
         } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
         import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
@@ -42,7 +33,6 @@
         const db = getFirestore(app);
         const auth = getAuth(app);
 
-        // Expondo para o React
         window.fbSDK = { 
             db, auth, collection, addDoc, updateDoc, deleteDoc, doc, 
             onSnapshot, query, orderBy, limit, serverTimestamp, signInAnonymously 
@@ -88,40 +78,37 @@
                 const initSync = async () => {
                     if (!window.fbSDK) return;
                     const { db, auth, onSnapshot, collection, query, orderBy, limit, signInAnonymously } = window.fbSDK;
-                    
                     try {
                         await signInAnonymously(auth);
-                        
-                        // Sincronizar Inventário
                         onSnapshot(query(collection(db, "inventory")), (snapshot) => {
                             setInventory(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
                             setLoading(false);
                         });
-
-                        // Sincronizar Histórico (últimos 50 itens)
                         onSnapshot(query(collection(db, "history"), orderBy("timestamp", "desc"), limit(50)), (snapshot) => {
                             setHistory(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
                         });
-
-                    } catch (error) {
-                        console.error("Erro na sincronização:", error);
-                    }
+                    } catch (error) { console.error("Erro:", error); }
                 };
-
                 const checkSDK = setInterval(() => {
-                    if (window.fbSDK && window.fbSDK.signInAnonymously) {
-                        initSync();
-                        clearInterval(checkSDK);
-                    }
+                    if (window.fbSDK?.signInAnonymously) { initSync(); clearInterval(checkSDK); }
                 }, 500);
                 return () => clearInterval(checkSDK);
             }, []);
 
             useEffect(() => {
                 if (formData.isBoxEntry) {
-                    const calculatedUnit = formData.unitsPerBox > 0 ? formData.boxPrice / formData.unitsPerBox : 0;
-                    const totalUnitsAdded = formData.boxQuantity * formData.unitsPerBox;
-                    setFormData(prev => ({ ...prev, unitPrice: calculatedUnit, quantity: totalUnitsAdded }));
+                    const price = parseFloat(formData.boxPrice) || 0;
+                    const units = parseInt(formData.unitsPerBox) || 1;
+                    const boxes = parseInt(formData.boxQuantity) || 1;
+                    
+                    const calculatedUnit = units > 0 ? price / units : 0;
+                    const totalUnits = boxes * units;
+                    
+                    setFormData(prev => ({ 
+                        ...prev, 
+                        unitPrice: calculatedUnit, 
+                        quantity: totalUnits 
+                    }));
                 }
             }, [formData.boxPrice, formData.unitsPerBox, formData.boxQuantity, formData.isBoxEntry]);
 
@@ -146,15 +133,20 @@
                 };
 
                 try {
-                    let docId = editingItem?.id;
+                    let docId;
                     if (editingItem) {
                         await updateDoc(doc(db, "inventory", editingItem.id), data);
+                        docId = editingItem.id;
                     } else {
                         const newDoc = await addDoc(collection(db, "inventory"), data);
                         docId = newDoc.id;
                     }
 
-                    // Salvar no Histórico
+                    // Detalhes para o histórico
+                    const histDetails = formData.isBoxEntry 
+                        ? `${formData.boxQuantity} caixas de ${formData.unitsPerBox}un (R$ ${formData.boxPrice} cada caixa)`
+                        : 'Entrada avulsa';
+
                     await addDoc(collection(db, "history"), {
                         productId: docId,
                         productName: data.name,
@@ -162,14 +154,12 @@
                         quantity: data.quantity,
                         unitPrice: data.unitPrice,
                         timestamp: serverTimestamp(),
-                        details: formData.isBoxEntry ? `${formData.boxQuantity} caixas de ${formData.unitsPerBox}` : 'Unidades avulsas'
+                        details: histDetails
                     });
 
                     showToast(editingItem ? "Atualizado!" : "Compra Registrada!");
                     setIsModalOpen(false);
-                } catch (err) {
-                    showToast("Erro ao salvar", "error");
-                }
+                } catch (err) { showToast("Erro ao salvar", "error"); }
             };
 
             const metrics = useMemo(() => {
@@ -185,7 +175,7 @@
             if (loading) return (
                 <div className="flex h-screen items-center justify-center flex-col gap-4">
                     <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="font-bold text-emerald-800 animate-pulse text-xs uppercase">Sincronizando Tribo...</p>
+                    <p className="font-bold text-emerald-800 animate-pulse text-xs uppercase tracking-widest">Sincronizando Tribo...</p>
                 </div>
             );
 
@@ -198,17 +188,20 @@
                         </div>
                     )}
 
-                    {/* Header e Menu */}
+                    {}
                     <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 px-6 py-4">
                         <div className="max-w-7xl mx-auto flex justify-between items-center">
                             <div className="flex items-center gap-3">
-                                <div className="bg-emerald-600 p-2.5 rounded-2xl text-white"><Icon name="package" size={24} /></div>
-                                <h1 className="text-xl font-black text-slate-800 uppercase tracking-tighter">Tribo Estoque</h1>
+                                <div className="bg-emerald-600 p-2.5 rounded-2xl text-white shadow-lg shadow-emerald-100"><Icon name="package" size={24} /></div>
+                                <div>
+                                    <h1 className="text-xl font-black text-slate-800 uppercase tracking-tighter">Tribo Estoque</h1>
+                                    <p className="text-[8px] font-black text-emerald-600 tracking-widest uppercase">Sistema Cloud</p>
+                                </div>
                             </div>
-                            <div className="flex gap-4">
+                            <div className="flex gap-2">
                                 <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'dashboard' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Painel</button>
                                 <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-xl font-bold transition-all ${activeTab === 'history' ? 'bg-slate-100 text-emerald-600' : 'text-slate-400'}`}>Histórico</button>
-                                <button onClick={() => { setEditingItem(null); setIsModalOpen(true); }} className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold shadow-lg shadow-emerald-100">+ Comprar</button>
+                                <button onClick={() => { setEditingItem(null); setIsModalOpen(true); }} className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold shadow-lg shadow-emerald-100 active:scale-95 transition-all">+ Comprar</button>
                             </div>
                         </div>
                     </nav>
@@ -216,82 +209,75 @@
                     <main className="max-w-7xl mx-auto px-6 mt-8">
                         {activeTab === 'dashboard' ? (
                             <div className="space-y-8">
-                                {}
+                                {/* Cards de Métricas */}
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Patrimônio</p>
-                                        <p className="text-4xl font-black text-slate-800">R$ {metrics.totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                    <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group">
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Patrimônio em Estoque</p>
+                                        <p className="text-4xl font-black text-slate-800 group-hover:text-emerald-600 transition-colors">R$ {metrics.totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                                     </div>
                                     <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Reposição</p>
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Itens p/ Reposição</p>
                                         <p className="text-4xl font-black text-amber-500">{metrics.lowStockCount}</p>
                                     </div>
                                     <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Sem Giro (14d)</p>
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Sem Giro (+14d)</p>
                                         <p className="text-4xl font-black text-rose-500">{metrics.stagnantCount}</p>
                                     </div>
                                 </div>
 
-                                <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden">
-                                    <div className="p-8 border-b border-slate-50 flex justify-between items-center">
-                                        <h2 className="text-2xl font-black">Inventário Atual</h2>
-                                        <input type="text" placeholder="Pesquisar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="bg-slate-50 px-6 py-3 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" />
+                                {/* Tabela de Inventário */}
+                                <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden shadow-sm">
+                                    <div className="p-8 border-b border-slate-50 flex flex-col md:row justify-between items-center gap-4">
+                                        <h2 className="text-2xl font-black text-slate-800">Inventário Geral</h2>
+                                        <div className="relative w-full md:w-auto">
+                                            <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                                            <input type="text" placeholder="Filtrar produtos..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="bg-slate-50 pl-12 pr-6 py-3 rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500 w-full" />
+                                        </div>
                                     </div>
-                                    <table className="w-full">
-                                        <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
-                                            <tr><th className="px-8 py-4 text-left">Produto</th><th className="px-8 py-4 text-left">Qtd</th><th className="px-8 py-4 text-left">Valor Unit.</th><th className="px-8 py-4 text-right">Ações</th></tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-50">
-                                            {inventory.filter(i => i.name.toLowerCase().includes(searchTerm.toLowerCase())).map(item => (
-                                                <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                                                    <td className="px-8 py-5 font-bold text-slate-700">{item.name}</td>
-                                                    <td className={`px-8 py-5 font-black ${item.quantity <= item.minStock ? 'text-rose-500' : 'text-slate-600'}`}>{item.quantity}</td>
-                                                    <td className="px-8 py-5 text-slate-400">R$ {item.unitPrice.toFixed(2)}</td>
-                                                    <td className="px-8 py-5 text-right">
-                                                        <button onClick={() => { setEditingItem(item); setFormData(item); setIsModalOpen(true); }} className="p-2 text-emerald-600"><Icon name="edit-2" /></button>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full">
+                                            <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400 tracking-widest">
+                                                <tr><th className="px-8 py-4 text-left">Produto</th><th className="px-8 py-4 text-left">Qtd</th><th className="px-8 py-4 text-left">Preço Unit.</th><th className="px-8 py-4 text-right">Ações</th></tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-50">
+                                                {inventory.filter(i => i.name.toLowerCase().includes(searchTerm.toLowerCase())).map(item => (
+                                                    <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
+                                                        <td className="px-8 py-5 font-bold text-slate-700">{item.name}</td>
+                                                        <td className={`px-8 py-5 font-black ${item.quantity <= item.minStock ? 'text-rose-500' : 'text-slate-600'}`}>{item.quantity} un.</td>
+                                                        <td className="px-8 py-5 text-slate-400 font-bold">R$ {item.unitPrice.toFixed(2)}</td>
+                                                        <td className="px-8 py-5 text-right opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <button onClick={() => { setEditingItem(item); setFormData({ ...item, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1 }); setIsModalOpen(true); }} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg"><Icon name="edit-2" /></button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 </div>
                             </div>
                         ) : (
                             <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden shadow-sm">
-                                <div className="p-8 border-b border-slate-50 bg-slate-50/50">
+                                <div className="p-8 border-b border-slate-50 bg-slate-50/30">
                                     <h2 className="text-2xl font-black text-slate-800">Histórico de Movimentações</h2>
-                                    <p className="text-slate-400 text-sm font-medium">Últimos 50 registros de compra e ajuste</p>
+                                    <p className="text-slate-400 text-sm font-medium">Últimos registros de entradas e ajustes</p>
                                 </div>
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-left">
                                         <thead className="bg-slate-50 text-[10px] uppercase font-black text-slate-400">
-                                            <tr>
-                                                <th className="px-8 py-5">Data/Hora</th>
-                                                <th className="px-8 py-5">Produto</th>
-                                                <th className="px-8 py-5">Tipo</th>
-                                                <th className="px-8 py-5">Quantidade</th>
-                                                <th className="px-8 py-5">Custo Unit.</th>
-                                                <th className="px-8 py-5">Detalhes</th>
-                                            </tr>
+                                            <tr><th className="px-8 py-5">Data</th><th className="px-8 py-5">Produto</th><th className="px-8 py-5">Tipo</th><th className="px-8 py-5">Qtd</th><th className="px-8 py-5">Detalhes</th></tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-50">
                                             {history.map(entry => (
-                                                <tr key={entry.id} className="hover:bg-slate-50 transition-colors">
-                                                    <td className="px-8 py-5 text-xs font-bold text-slate-500">
-                                                        {entry.timestamp?.toDate ? entry.timestamp.toDate().toLocaleString('pt-BR') : 'Gravando...'}
-                                                    </td>
+                                                <tr key={entry.id} className="hover:bg-slate-50">
+                                                    <td className="px-8 py-5 text-xs font-bold text-slate-500">{entry.timestamp?.toDate ? entry.timestamp.toDate().toLocaleString('pt-BR') : 'Gravando...'}</td>
                                                     <td className="px-8 py-5 font-black text-slate-800">{entry.productName}</td>
                                                     <td className="px-8 py-5">
-                                                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${entry.type === 'Nova Compra' ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
-                                                            {entry.type}
-                                                        </span>
+                                                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase ${entry.type === 'Nova Compra' ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>{entry.type}</span>
                                                     </td>
                                                     <td className="px-8 py-5 font-bold text-slate-700">{entry.quantity} un.</td>
-                                                    <td className="px-8 py-5 text-emerald-600 font-bold">R$ {entry.unitPrice.toFixed(2)}</td>
-                                                    <td className="px-8 py-5 text-slate-400 text-xs">{entry.details}</td>
+                                                    <td className="px-8 py-5 text-slate-400 text-xs italic">{entry.details}</td>
                                                 </tr>
                                             ))}
-                                            {history.length === 0 && <tr><td colSpan="6" className="p-20 text-center text-slate-400">Nenhum histórico encontrado.</td></tr>}
                                         </tbody>
                                     </table>
                                 </div>
@@ -299,38 +285,70 @@
                         )}
                     </main>
 
-                    {/* Modal de Lançamento */}
+                    {}
                     {isModalOpen && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-                            <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+                            <div className="bg-white rounded-[3rem] shadow-2xl w-full max-w-xl overflow-hidden animate-in zoom-in-95">
                                 <div className="bg-emerald-600 p-8 flex justify-between items-center text-white">
-                                    <h3 className="text-xl font-black">{editingItem ? 'Ajustar Produto' : 'Lançar Compra'}</h3>
-                                    <button onClick={() => setIsModalOpen(false)} className="bg-white/20 p-2 rounded-xl"><Icon name="x" /></button>
+                                    <div>
+                                        <h3 className="text-2xl font-black">{editingItem ? 'Ajustar Item' : 'Nova Compra'}</h3>
+                                        <p className="text-emerald-100 text-[10px] uppercase font-bold tracking-widest">Preencha os dados abaixo</p>
+                                    </div>
+                                    <button onClick={() => setIsModalOpen(false)} className="bg-white/20 p-2 rounded-xl hover:bg-white/30 transition-colors"><Icon name="x" size={24} /></button>
                                 </div>
                                 <form onSubmit={handleSave} className="p-8 space-y-6">
-                                    <input required type="text" placeholder="Nome do Produto" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none focus:ring-2 focus:ring-emerald-500" />
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Nome do Produto</label>
+                                        <input required type="text" placeholder="Ex: Pão Brioche" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-6 py-4 bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-2xl font-bold outline-none transition-all" />
+                                    </div>
                                     
                                     <div className="flex bg-slate-100 p-1.5 rounded-2xl">
-                                        <button type="button" onClick={() => setFormData({...formData, isBoxEntry: false})} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl ${!formData.isBoxEntry ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500'}`}>Unidade</button>
-                                        <button type="button" onClick={() => setFormData({...formData, isBoxEntry: true})} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl ${formData.isBoxEntry ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500'}`}>Caixa</button>
+                                        <button type="button" onClick={() => setFormData({...formData, isBoxEntry: false})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${!formData.isBoxEntry ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500'}`}>Unidade</button>
+                                        <button type="button" onClick={() => setFormData({...formData, isBoxEntry: true})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${formData.isBoxEntry ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500'}`}>Lançar por Caixa</button>
                                     </div>
 
                                     {formData.isBoxEntry ? (
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <input required type="number" step="0.01" placeholder="Valor Caixa" onChange={e => setFormData({...formData, boxPrice: e.target.value})} className="px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
-                                            <input required type="number" placeholder="Pães p/ Caixa" onChange={e => setFormData({...formData, unitsPerBox: e.target.value})} className="px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
-                                            <div className="col-span-2">
-                                                <input required type="number" placeholder="Quantas Caixas?" onChange={e => setFormData({...formData, boxQuantity: e.target.value})} className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-100 text-emerald-700 rounded-2xl font-black text-center" />
+                                        <div className="space-y-4 animate-in slide-in-from-top-2">
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-black uppercase text-slate-400">Valor da Caixa</label>
+                                                    <input required type="number" step="0.01" placeholder="0.00" value={formData.boxPrice} onChange={e => setFormData({...formData, boxPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-black uppercase text-slate-400">Itens na Caixa</label>
+                                                    <input required type="number" placeholder="Ex: 72" value={formData.unitsPerBox} onChange={e => setFormData({...formData, unitsPerBox: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
+                                                </div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] font-black uppercase text-emerald-600">Quantas Caixas Chegaram?</label>
+                                                <input required type="number" placeholder="1" value={formData.boxQuantity} onChange={e => setFormData({...formData, boxQuantity: e.target.value})} className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-100 text-emerald-800 rounded-2xl font-black text-center text-xl outline-none" />
+                                            </div>
+                                            
+                                            <div className="bg-slate-900 rounded-3xl p-6 text-white flex justify-between items-center shadow-xl">
+                                                <div>
+                                                    <p className="text-[8px] font-black uppercase tracking-widest text-emerald-400">Custo p/ Unidade</p>
+                                                    <p className="text-2xl font-black">R$ {formData.unitPrice.toFixed(2)}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-[8px] font-black uppercase tracking-widest text-emerald-400">Total de Itens</p>
+                                                    <p className="text-2xl font-black text-emerald-400">{formData.quantity} <span className="text-xs text-white opacity-50">un.</span></p>
+                                                </div>
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <input required type="number" step="0.01" placeholder="Preço Unit." value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
-                                            <input required type="number" placeholder="Qtd Atual" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
+                                        <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-top-2">
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] font-black uppercase text-slate-400">Preço Unitário</label>
+                                                <input required type="number" step="0.01" value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] font-black uppercase text-slate-400">Qtd Atual</label>
+                                                <input required type="number" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
+                                            </div>
                                         </div>
                                     )}
 
-                                    <button type="submit" className="w-full bg-emerald-600 text-white font-black py-5 rounded-[2rem] shadow-xl active:scale-95 transition-all uppercase tracking-widest">Confirmar na Nuvem</button>
+                                    <button type="submit" className="w-full bg-emerald-600 text-white font-black py-5 rounded-[2rem] shadow-xl hover:bg-emerald-700 active:scale-95 transition-all uppercase tracking-[0.2em] text-sm">Confirmar Lançamento Cloud</button>
                                 </form>
                             </div>
                         </div>
