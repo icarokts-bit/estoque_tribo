@@ -370,7 +370,7 @@
                             <div className="space-y-8 animate-in fade-in duration-500">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                     <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group hover:border-emerald-300 transition-all">
-                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Patrimônio (Preço Médio)</p>
+                                        <p className="text-slate-400 text-[10px] font-black uppercase mb-1">Património (Preço Médio)</p>
                                         <p className="text-4xl font-black text-slate-800">R$ {metrics.totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                                     </div>
                                     <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 group hover:border-amber-300 transition-all">
@@ -486,7 +486,7 @@
                                                         <tr>
                                                             <th className="px-8 py-4">Nome do Produto</th>
                                                             <th className="px-8 py-4 text-center">Stock Total</th>
-                                                            <th className="px-8 py-4 text-center">Preço Médio</th>
+                                                            <th className="px-8 py-4 text-center">Preço Médio (R$)</th>
                                                             <th className="px-8 py-4 text-right">Ações</th>
                                                         </tr>
                                                     </thead>
@@ -495,7 +495,7 @@
                                                             <tr key={item.name} className="hover:bg-slate-50/30 transition-colors group">
                                                                 <td className="px-8 py-4 font-black text-slate-700">{item.name}</td>
                                                                 <td className="px-8 py-4 text-center text-xs font-bold text-slate-500">{item.quantity} un</td>
-                                                                <td className="px-8 py-4 text-center text-xs font-black text-emerald-600">R$ {item.unitPrice.toFixed(2)}</td>
+                                                                <td className="px-8 py-4 text-center text-xs font-black text-emerald-600 font-mono">R$ {item.unitPrice.toFixed(2)}</td>
                                                                 <td className="px-8 py-4 text-right">
                                                                     <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
                                                                         <button onClick={() => { setEditingItem(item); setFormData({...item, isBoxEntry: false}); setIsModalOpen(true); }} className="text-emerald-500 hover:bg-emerald-50 p-2 rounded-xl transition-all"><Icon name="edit" size={16} /></button>
@@ -527,6 +527,7 @@
                                                 <th className="px-8 py-5">Produto</th>
                                                 <th className="px-8 py-5">Movimento</th>
                                                 <th className="px-8 py-5">Descrição</th>
+                                                <th className="px-8 py-5 text-right">Preço Un.</th>
                                                 <th className="px-8 py-5 text-right">Alteração</th>
                                             </tr>
                                         </thead>
@@ -546,6 +547,9 @@
                                                         </span>
                                                     </td>
                                                     <td className="px-8 py-5 text-slate-500 italic">{h.details}</td>
+                                                    <td className="px-8 py-5 text-right font-black text-slate-600 font-mono uppercase">
+                                                        R$ {Number(h.unitPrice).toFixed(2)}
+                                                    </td>
                                                     <td className={`px-8 py-5 text-right font-black ${h.quantity < 0 ? 'text-rose-500' : 'text-emerald-600'}`}>
                                                         {h.quantity > 0 ? `+${h.quantity}` : h.quantity} un
                                                     </td>
@@ -617,7 +621,7 @@
                                                                 <p className="text-[8px] text-slate-400 uppercase font-bold tracking-tight">{h.details}</p>
                                                             </div>
                                                             <div className="text-right">
-                                                                <p className="text-[10px] font-black text-emerald-600">R$ {h.unitPrice.toFixed(2)}</p>
+                                                                <p className="text-[10px] font-black text-emerald-600 font-mono">R$ {h.unitPrice.toFixed(2)}</p>
                                                                 <p className="text-[8px] text-slate-300 font-bold uppercase">{Math.abs(h.quantity)} un</p>
                                                             </div>
                                                         </div>
@@ -649,10 +653,10 @@
                                                     <label className="text-[9px] font-black uppercase text-emerald-600 ml-1 text-center block">Total de Caixas Compradas</label>
                                                     <input required type="number" value={formData.boxQuantity} onChange={e => setFormData({...formData, boxQuantity: e.target.value})} className="w-full py-3 rounded-xl font-black text-center text-3xl border-2 border-emerald-200 outline-none" />
                                                 </div>
-                                                <div className="bg-slate-900 rounded-2xl p-4 text-white flex justify-between items-center">
+                                                <div className="bg-slate-900 rounded-2xl p-4 text-white flex justify-between items-center shadow-inner">
                                                     <div className="text-center flex-1 border-r border-slate-700">
                                                         <p className="text-[8px] font-black uppercase text-emerald-400">Novo Custo Un.</p>
-                                                        <p className="text-xl font-black">R$ {formData.unitPrice.toFixed(2)}</p>
+                                                        <p className="text-xl font-black font-mono">R$ {formData.unitPrice.toFixed(2)}</p>
                                                     </div>
                                                     <div className="text-center flex-1">
                                                         <p className="text-[8px] font-black uppercase text-emerald-400">Total Unidades</p>
@@ -663,7 +667,7 @@
                                         ) : (
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div>
-                                                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Preço Unitário</label>
+                                                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">R$ Preço Unitário</label>
                                                     <input required type="number" step="0.01" value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500 shadow-inner" />
                                                 </div>
                                                 <div>
