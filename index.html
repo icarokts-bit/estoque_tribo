@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tribo Estoque - Cloud v2.0</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { 
+            getFirestore, 
+            collection, 
+            addDoc, 
+            updateDoc, 
+            deleteDoc, 
+            doc, 
+            onSnapshot, 
+            query, 
+            serverTimestamp 
+        } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCtW8DBXTvhDXlgVETRr5Rmai9-HGQ9eI0",
+            authDomain: "estoque-tribo.firebaseapp.com",
+            projectId: "estoque-tribo",
+            storageBucket: "estoque-tribo.firebasestorage.app",
+            messagingSenderId: "164742205462",
+            appId: "1:164742205462:web:4d172f468955a14b5ae537",
+            measurementId: "G-P9KJT31DLB"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // Expose Firebase to the Global Window object for React
+        window.fbSDK = { 
+            db, auth, collection, addDoc, updateDoc, deleteDoc, doc, 
+            onSnapshot, query, serverTimestamp, signInAnonymously 
+        };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+        body { 
+            font-family: 'Plus Jakarta Sans', sans-serif; 
+            background-color: #f8fafc;
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const Icon = ({ name, size = 20, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} style={{width: size, height: size}} className={className}></i>;
+        };
+
+        const App = () => {
+            const [inventory, setInventory] = useState([]);
+            const [categories, setCategories] = useState(['Padaria', 'Bebidas', 'Frios', 'Limpeza', 'Copa']);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [editingItem, setEditingItem] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [notification, setNotification] = useState(null);
+
+            const [formData, setFormData] = useState({
+                name: '', category: 'Padaria', quantity: 0, minStock: 5, unitPrice: 0,
+                isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1,
+                whatsappContact: '55'
+            });
+
+            useEffect(() => {
+                const initSync = async () => {
+                    if (!window.fbSDK) return;
+                    const { db, auth, onSnapshot, collection, query, signInAnonymously } = window.fbSDK;
+                    
+                    try {
+                        await signInAnonymously(auth);
+                        const q = query(collection(db, "inventory"));
+                        const unsub = onSnapshot(q, (snapshot) => {
+                            const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                            setInventory(items);
+                            setLoading(false);
+                        });
+                        return unsub;
+                    } catch (error) {
+                        console.error("Erro na sincronização:", error);
+                    }
+                };
+
+                const checkSDK = setInterval(() => {
+                    if (window.fbSDK && window.fbSDK.signInAnonymously) {
+                        initSync();
+                        clearInterval(checkSDK);
+                    }
+                }, 500);
+                return () => clearInterval(checkSDK);
+            }, []);
+
+            useEffect(() => {
+                if (formData.isBoxEntry) {
+                    const calculatedUnit = formData.unitsPerBox > 0 ? formData.boxPrice / formData.unitsPerBox : 0;
+                    const totalUnitsAdded = formData.boxQuantity * formData.unitsPerBox;
+                    setFormData(prev => ({ 
+                        ...prev, 
+                        unitPrice: calculatedUnit,
+                        quantity: totalUnitsAdded 
+                    }));
+                }
+            }, [formData.boxPrice, formData.unitsPerBox, formData.boxQuantity, formData.isBoxEntry]);
+
+            const showToast = (message, type = 'success') => {
+                setNotification({ message, type });
+                setTimeout(() => setNotification(null), 3000);
+            };
+
+            const handleSave = async (e) => {
+                e.preventDefault();
+                const { db, collection, addDoc, updateDoc, doc, serverTimestamp } = window.fbSDK;
+                
+                const data = {
+                    name: formData.name,
+                    category: formData.category,
+                    quantity: Number(formData.quantity),
+                    minStock: Number(formData.minStock),
+                    unitPrice: Number(formData.unitPrice),
+                    whatsappContact: formData.whatsappContact,
+                    lastUpdate: new Date().toISOString(),
+                    updatedAt: serverTimestamp()
+                };
+
+                try {
+                    if (editingItem) {
+                        await updateDoc(doc(db, "inventory", editingItem.id), data);
+                        showToast("Atualizado com sucesso!");
+                    } else {
+                        await addDoc(collection(db, "inventory"), data);
+                        showToast("Produto cadastrado!");
+                    }
+                    setIsModalOpen(false);
+                } catch (err) {
+                    showToast("Erro ao salvar", "error");
+                }
+            };
+
+            const deleteItem = async (id) => {
+                const { db, doc, deleteDoc } = window.fbSDK;
+                await deleteDoc(doc(db, "inventory", id));
+                showToast("Item removido", "error");
+            };
+
+            const metrics = useMemo(() => {
+                const totalValue = inventory.reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0);
+                const lowStockItems = inventory.filter(item => item.quantity <= item.minStock);
+                const stagnantItems = inventory.filter(item => {
+                    const lastDate = new Date(item.lastUpdate);
+                    const diffDays = Math.ceil(Math.abs(new Date() - lastDate) / (1000 * 60 * 60 * 24));
+                    return diffDays > 14;
+                });
+
+                return { totalValue, lowStockCount: lowStockItems.length, stagnantCount: stagnantItems.length, lowStockItems, stagnantItems };
+            }, [inventory]);
+
+            const filteredInventory = inventory.filter(item => 
+                item.name.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            if (loading) return (
+                <div className="flex h-screen items-center justify-center flex-col gap-4">
+                    <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                    <p className="font-bold text-emerald-800 animate-pulse text-xs tracking-widest uppercase">Conectando Nuvem Tribo...</p>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen pb-20">
+                    {/* Notification Toast */}
+                    {notification && (
+                        <div className={`fixed top-6 right-6 z-[100] px-6 py-4 rounded-2xl shadow-2xl text-white flex items-center gap-3 animate-in slide-in-from-right-10 ${notification.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+                            <Icon name={notification.type === 'success' ? 'check-circle' : 'alert-triangle'} />
+                            <span className="font-bold">{notification.message}</span>
+                        </div>
+                    )}
+
+                    {/* Navigation Header */}
+                    <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 px-6 py-4">
+                        <div className="max-w-7xl mx-auto flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-emerald-600 p-2.5 rounded-2xl shadow-lg shadow-emerald-100 text-white">
+                                    <Icon name="package" size={24} />
+                                </div>
+                                <div>
+                                    <h1 className="text-xl font-black tracking-tighter uppercase text-slate-800">Tribo Estoque</h1>
+                                    <div className="flex items-center gap-1">
+                                        <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div>
+                                        <p className="text-[10px] text-emerald-600 font-bold uppercase tracking-widest">Sincronizado</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={() => { setEditingItem(null); setFormData({name: '', category: 'Padaria', quantity: 0, minStock: 5, unitPrice: 0, isBoxEntry: false, boxPrice: 0, unitsPerBox: 1, boxQuantity: 1, whatsappContact: '55'}); setIsModalOpen(true); }}
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-2xl flex items-center gap-2 font-bold shadow-xl shadow-emerald-100 transition-all active:scale-95"
+                            >
+                                <Icon name="plus" /> <span className="hidden sm:inline">Lançar Compra</span>
+                            </button>
+                        </div>
+                    </nav>
+
+                    {}
+                    <main className="max-w-7xl mx-auto px-6 mt-8 space-y-8">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                                <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-2">Valor em Estoque</p>
+                                <p className="text-4xl font-black text-slate-800">R$ {metrics.totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                            </div>
+                            <div className={`p-8 rounded-[2.5rem] border border-slate-100 shadow-sm ${metrics.lowStockCount > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white'}`}>
+                                <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-2">Reposição Urgente</p>
+                                <p className={`text-4xl font-black ${metrics.lowStockCount > 0 ? 'text-amber-600' : 'text-slate-800'}`}>{metrics.lowStockCount}</p>
+                            </div>
+                            <div className={`p-8 rounded-[2.5rem] border border-slate-100 shadow-sm ${metrics.stagnantCount > 0 ? 'bg-rose-50 border-rose-200' : 'bg-white'}`}>
+                                <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-2">Parados +14 Dias</p>
+                                <p className={`text-4xl font-black ${metrics.stagnantCount > 0 ? 'text-rose-600' : 'text-slate-800'}`}>{metrics.stagnantCount}</p>
+                            </div>
+                        </div>
+
+                        {/* Urgent Lists */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                            <div className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-sm">
+                                <div className="p-6 border-b border-slate-50 flex items-center gap-3">
+                                    <Icon name="alert-circle" className="text-amber-500" />
+                                    <h3 className="font-black uppercase tracking-tight text-slate-700">Comprar Agora</h3>
+                                </div>
+                                <div className="divide-y divide-slate-50 custom-scrollbar overflow-y-auto max-h-[350px]">
+                                    {metrics.lowStockItems.map(item => (
+                                        <div key={item.id} className="p-6 flex justify-between items-center hover:bg-slate-50 transition-all">
+                                            <div>
+                                                <p className="font-bold text-slate-800">{item.name}</p>
+                                                <p className="text-xs text-rose-500 font-bold">Estoque: {item.quantity} (Mín: {item.minStock})</p>
+                                            </div>
+                                            <button 
+                                                onClick={() => {
+                                                    const msg = `🚨 *Alerta Tribo*%0AProduto: *${item.name}*%0AEstoque Crítico: *${item.quantity}*%0APrecisamos repor!`;
+                                                    window.open(`https://wa.me/${item.whatsappContact}?text=${msg}`, '_blank');
+                                                }}
+                                                className="bg-emerald-500 text-white p-3 rounded-2xl hover:bg-emerald-600 shadow-lg shadow-emerald-50 transition-all active:scale-90"
+                                            >
+                                                <Icon name="message-square" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {metrics.lowStockItems.length === 0 && <p className="p-10 text-center text-slate-400 font-medium">Tudo abastecido!</p>}
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-sm">
+                                <div className="p-6 border-b border-slate-50 flex items-center gap-3">
+                                    <Icon name="history" className="text-indigo-500" />
+                                    <h3 className="font-black uppercase tracking-tight text-slate-700">Sem Giro (+14d)</h3>
+                                </div>
+                                <div className="divide-y divide-slate-50 overflow-y-auto max-h-[350px]">
+                                    {metrics.stagnantItems.map(item => (
+                                        <div key={item.id} className="p-6 flex justify-between items-center">
+                                            <div>
+                                                <p className="font-bold text-slate-800">{item.name}</p>
+                                                <p className="text-xs text-slate-400 uppercase font-black tracking-widest">Parado desde: {new Date(item.lastUpdate).toLocaleDateString()}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-[10px] font-black text-slate-400 uppercase">Perda Potencial</p>
+                                                <p className="font-black text-rose-600">R$ {(item.quantity * item.unitPrice).toFixed(2)}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {metrics.stagnantItems.length === 0 && <p className="p-10 text-center text-slate-400 font-medium">Estoque girando bem!</p>}
+                                </div>
+                            </div>
+                        </div>
+
+                        {}
+                        <div className="bg-white rounded-[3rem] border border-slate-100 overflow-hidden shadow-sm">
+                            <div className="p-8 border-b border-slate-50 flex flex-col md:flex-row justify-between items-center gap-4">
+                                <h2 className="text-2xl font-black text-slate-800">Inventário Geral</h2>
+                                <div className="relative w-full md:w-80">
+                                    <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                                    <input 
+                                        type="text" 
+                                        placeholder="Pesquisar pão, frios..." 
+                                        className="w-full pl-12 pr-6 py-4 bg-slate-50 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:bg-white border-2 border-transparent focus:border-emerald-500 transition-all font-bold"
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                    />
+                                </div>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left">
+                                    <thead className="bg-slate-50/50 text-[10px] uppercase font-black text-slate-400 tracking-widest">
+                                        <tr>
+                                            <th className="px-8 py-5">Produto</th>
+                                            <th className="px-8 py-5">Estoque</th>
+                                            <th className="px-8 py-5">Preço Unit.</th>
+                                            <th className="px-8 py-5">Patrimônio</th>
+                                            <th className="px-8 py-5 text-right">Ações</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                        {filteredInventory.map(item => (
+                                            <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
+                                                <td className="px-8 py-6">
+                                                    <p className="font-black text-slate-700">{item.name}</p>
+                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 py-0.5 bg-slate-100 rounded-md">{item.category}</span>
+                                                </td>
+                                                <td className="px-8 py-6">
+                                                    <p className={`font-black text-lg ${item.quantity <= item.minStock ? 'text-rose-600' : 'text-slate-800'}`}>{item.quantity}</p>
+                                                    <p className="text-[10px] text-slate-400 font-bold uppercase">Mín: {item.minStock}</p>
+                                                </td>
+                                                <td className="px-8 py-6 font-bold text-slate-500">R$ {Number(item.unitPrice).toFixed(2)}</td>
+                                                <td className="px-8 py-6 font-black text-emerald-600 text-lg">R$ {(item.quantity * item.unitPrice).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td>
+                                                <td className="px-8 py-6 text-right">
+                                                    <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                                        <button onClick={() => { setEditingItem(item); setFormData(item); setIsModalOpen(true); }} className="p-3 text-indigo-600 hover:bg-indigo-50 rounded-2xl"><Icon name="edit-3" /></button>
+                                                        <button onClick={() => { if(confirm('Excluir pão da lista?')) deleteItem(item.id) }} className="p-3 text-rose-600 hover:bg-rose-50 rounded-2xl"><Icon name="trash-2" /></button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </main>
+
+                    {}
+                    {isModalOpen && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md overflow-y-auto">
+                            <div className="bg-white rounded-[3rem] shadow-2xl w-full max-w-xl my-auto overflow-hidden animate-in zoom-in-95 duration-200">
+                                <div className="bg-emerald-600 p-8 flex justify-between items-center text-white">
+                                    <div>
+                                        <h3 className="text-2xl font-black">{editingItem ? 'Editar Produto' : 'Lançar Compra'}</h3>
+                                        <p className="text-emerald-100 text-[10px] font-bold uppercase tracking-widest">Sincronização em Tempo Real</p>
+                                    </div>
+                                    <button onClick={() => setIsModalOpen(false)} className="hover:rotate-90 transition-all bg-white/20 p-2 rounded-2xl"><Icon name="x" size={24} /></button>
+                                </div>
+                                <form onSubmit={handleSave} className="p-8 space-y-6">
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Nome do Produto</label>
+                                        <input required type="text" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-6 py-4 bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-2xl outline-none transition-all font-bold" placeholder="Ex: Pão de Forma" />
+                                    </div>
+
+                                    <div className="flex bg-slate-100 p-1.5 rounded-2xl">
+                                        <button type="button" onClick={() => setFormData({...formData, isBoxEntry: false})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${!formData.isBoxEntry ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-500'}`}>Unitário</button>
+                                        <button type="button" onClick={() => setFormData({...formData, isBoxEntry: true})} className={`flex-1 py-3 text-[10px] font-black uppercase rounded-xl transition-all ${formData.isBoxEntry ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-500'}`}>Lançar por Caixa</button>
+                                    </div>
+
+                                    {formData.isBoxEntry ? (
+                                        <div className="space-y-4 animate-in fade-in duration-300">
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Valor da Caixa</label>
+                                                    <input required type="number" step="0.01" value={formData.boxPrice} onChange={(e) => setFormData({...formData, boxPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500 outline-none" />
+                                                </div>
+                                                <div>
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Itens p/ Caixa</label>
+                                                    <input required type="number" value={formData.unitsPerBox} onChange={(e) => setFormData({...formData, unitsPerBox: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500 outline-none" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-black text-emerald-600 uppercase mb-2 block">Quantas Caixas Chegaram?</label>
+                                                <input required type="number" value={formData.boxQuantity} onChange={(e) => setFormData({...formData, boxQuantity: e.target.value})} className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-200 text-emerald-800 rounded-2xl font-black text-xl text-center outline-none" />
+                                            </div>
+                                            <div className="bg-slate-900 rounded-[2rem] p-6 text-white flex justify-between items-center shadow-2xl">
+                                                <div><p className="text-[8px] font-black uppercase text-emerald-400">Custo Unitário</p><p className="text-xl font-black">R$ {formData.unitPrice.toFixed(2)}</p></div>
+                                                <div className="text-right"><p className="text-[8px] font-black uppercase text-emerald-400">Total Adicionado</p><p className="text-xl font-black text-emerald-400">{formData.quantity} un.</p></div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="grid grid-cols-2 gap-4 animate-in fade-in">
+                                            <div>
+                                                <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Preço Unitário</label>
+                                                <input required type="number" step="0.01" value={formData.unitPrice} onChange={(e) => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500" />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Qtd. no Estoque</label>
+                                                <input required type="number" value={formData.quantity} onChange={(e) => setFormData({...formData, quantity: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500" />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Estoque Mínimo</label>
+                                            <input required type="number" value={formData.minStock} onChange={(e) => setFormData({...formData, minStock: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-rose-500" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Categoria</label>
+                                            <select value={formData.category} onChange={(e) => setFormData({...formData, category: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none appearance-none cursor-pointer border-2 border-transparent focus:border-emerald-500">
+                                                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">WhatsApp p/ Reposição (DDD+Número)</label>
+                                        <div className="relative">
+                                            <Icon name="message-square" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                                            <input type="tel" value={formData.whatsappContact} onChange={(e) => setFormData({...formData, whatsappContact: e.target.value})} className="w-full pl-12 pr-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500" placeholder="5511999999999" />
+                                        </div>
+                                    </div>
+
+                                    <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-5 rounded-[2rem] shadow-2xl shadow-emerald-200 transition-all text-lg active:scale-95">
+                                        {editingItem ? 'Salvar Alterações' : 'Confirmar Registro na Nuvem'}
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
