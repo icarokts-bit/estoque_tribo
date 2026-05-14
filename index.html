@@ -76,26 +76,14 @@
                 whatsappContact: '55'
             });
 
-            useEffect(() => {
-                const initSync = async () => {
-                    if (!window.fbSDK) return;
-                    const { db, auth, onSnapshot, collection, query, orderBy, limit, signInAnonymously } = window.fbSDK;
-                    try {
-                        await signInAnonymously(auth);
-                        onSnapshot(query(collection(db, "inventory")), (snapshot) => {
-                            setInventory(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-                            setLoading(false);
-                        });
-                        onSnapshot(query(collection(db, "history"), orderBy("timestamp", "desc"), limit(50)), (snapshot) => {
-                            setHistory(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-                        });
-                    } catch (error) { console.error("Erro na sincronização:", error); }
-                };
-                const checkSDK = setInterval(() => {
-                    if (window.fbSDK?.signInAnonymously) { initSync(); clearInterval(checkSDK); }
-                }, 500);
-                return () => clearInterval(checkSDK);
-            }, []);
+            const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
+            const [newCategoryName, setNewCategoryName] = useState('');
+
+            // Obter lista única de categorias existentes para o select
+            const existingCategories = useMemo(() => {
+                const cats = new Set(inventory.map(i => i.category));
+                return Array.from(cats).sort();
+            }, [inventory]);
 
             useEffect(() => {
                 if (formData.isBoxEntry) {
@@ -116,9 +104,17 @@
             const handleSave = async (e) => {
                 e.preventDefault();
                 const { db, collection, addDoc, updateDoc, doc, serverTimestamp } = window.fbSDK;
+                
+                const finalCategory = showNewCategoryInput ? newCategoryName : formData.category;
+
+                if (!finalCategory) {
+                    showToast("Defina uma categoria!", "error");
+                    return;
+                }
+
                 const data = {
                     name: formData.name,
-                    category: formData.category,
+                    category: finalCategory,
                     quantity: Number(formData.quantity),
                     minStock: Number(formData.minStock),
                     unitPrice: Number(formData.unitPrice),
@@ -153,6 +149,8 @@
 
                     showToast(editingItem ? "Atualizado!" : "Lançamento Sucesso!");
                     setIsModalOpen(false);
+                    setShowNewCategoryInput(false);
+                    setNewCategoryName('');
                 } catch (err) { showToast("Erro ao salvar", "error"); }
             };
 
@@ -406,15 +404,51 @@
                                                 <input required type="number" value={formData.minStock} onChange={e => setFormData({...formData, minStock: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold" />
                                             </div>
                                             <div>
-                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Família</label>
-                                                <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none">
-                                                    <option value="Padaria">Padaria</option>
-                                                    <option value="Frios">Frios</option>
-                                                    <option value="Bebidas">Bebidas</option>
-                                                    <option value="Limpeza">Limpeza</option>
-                                                    <option value="Secos">Secos</option>
-                                                </select>
+                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Família (Categoria)</label>
+                                                {!showNewCategoryInput ? (
+                                                    <div className="flex gap-2">
+                                                        <select 
+                                                            value={formData.category} 
+                                                            onChange={e => {
+                                                                if(e.target.value === 'NEW') {
+                                                                    setShowNewCategoryInput(true);
+                                                                } else {
+                                                                    setFormData({...formData, category: e.target.value});
+                                                                }
+                                                            }} 
+                                                            className="flex-1 px-4 py-4 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500"
+                                                        >
+                                                            {existingCategories.map(cat => (
+                                                                <option key={cat} value={cat}>{cat}</option>
+                                                            ))}
+                                                            <option value="NEW" className="text-emerald-600 font-bold">+ Nova Categoria...</option>
+                                                        </select>
+                                                    </div>
+                                                ) : (
+                                                    <div className="relative">
+                                                        <input 
+                                                            autoFocus
+                                                            type="text" 
+                                                            placeholder="Nome da Categoria"
+                                                            value={newCategoryName}
+                                                            onChange={e => setNewCategoryName(e.target.value)}
+                                                            className="w-full px-6 py-4 bg-emerald-50 border-2 border-emerald-200 rounded-2xl font-bold outline-none"
+                                                        />
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => setShowNewCategoryInput(false)}
+                                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-rose-500 uppercase px-2"
+                                                        >
+                                                            Cancelar
+                                                        </button>
+                                                    </div>
+                                                )}
                                             </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">WhatsApp p/ Reposição (DDD + Número)</label>
+                                            <input type="text" value={formData.whatsappContact} onChange={e => setFormData({...formData, whatsappContact: e.target.value})} className="w-full px-6 py-4 bg-slate-50 rounded-2xl font-bold outline-none" placeholder="5511999999999" />
                                         </div>
                                     </div>
                                     <button type="submit" className="w-full bg-emerald-600 text-white font-black py-5 rounded-[2rem] shadow-xl hover:bg-emerald-700 active:scale-95 transition-all text-sm uppercase tracking-widest">Confirmar Lançamento Cloud</button>
