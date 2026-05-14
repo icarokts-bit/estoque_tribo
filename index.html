@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tribo Estoque - Cloud v2.8</title>
+    <title>Tribo Estoque - Cloud v2.9</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -80,7 +80,6 @@
             });
 
             const [exitQty, setExitQty] = useState(1);
-
             const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
             const [newCategoryName, setNewCategoryName] = useState('');
 
@@ -241,7 +240,6 @@
             const handleExitSave = async (e) => {
                 e.preventDefault();
                 if (!exitItem || Number(exitQty) <= 0) return;
-                // FIX: Adicionado 'collection' na desestruturação abaixo
                 const { db, updateDoc, doc, addDoc, collection, serverTimestamp } = window.fbSDK;
                 
                 const relatedItems = rawInventory.filter(i => i.name.toLowerCase().trim() === exitItem.name.toLowerCase().trim());
@@ -319,8 +317,14 @@
             const itemHistory = useMemo(() => {
                 if (!formData.name) return [];
                 const search = formData.name.toLowerCase().trim();
-                return history.filter(h => h.productName.toLowerCase().includes(search)).slice(0, 3);
+                return history.filter(h => h.productName.toLowerCase().trim() === search).slice(0, 5);
             }, [formData.name, history]);
+
+            const nameSuggestions = useMemo(() => {
+                if (!formData.name || editingItem) return [];
+                const search = formData.name.toLowerCase().trim();
+                return inventory.filter(i => i.name.toLowerCase().includes(search) && i.name.toLowerCase() !== search).slice(0, 5);
+            }, [formData.name, inventory, editingItem]);
 
             if (loading) return (
                 <div className="flex h-screen items-center justify-center flex-col gap-4 bg-slate-50">
@@ -554,7 +558,7 @@
                         )}
                     </main>
 
-                    {/* MODAL DE ENTRADA */}
+                    {/* MODAL DE ENTRADA (MUITO MAIS INTELIGENTE) */}
                     {isModalOpen && (
                         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-in fade-in">
                             <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-xl overflow-hidden animate-in zoom-in-95">
@@ -567,16 +571,68 @@
                                 </div>
                                 <form onSubmit={handleSave} className="p-6 md:p-8 space-y-6 max-h-[75vh] overflow-y-auto custom-scrollbar text-sm">
                                     <div className="space-y-4">
-                                        <div>
-                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Descrição</label>
-                                            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500" placeholder="Ex: Hambúrguer 100G" />
+                                        <div className="relative">
+                                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5 ml-1">Descrição do Produto</label>
+                                            <input required type="text" value={formData.name} 
+                                                onChange={e => setFormData({...formData, name: e.target.value})} 
+                                                className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-emerald-500 shadow-inner" 
+                                                placeholder="Digite o nome do produto..." 
+                                            />
+                                            
+                                            {/* Sugestões de produtos existentes */}
+                                            {nameSuggestions.length > 0 && (
+                                                <div className="absolute z-50 top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden">
+                                                    <p className="px-4 py-2 bg-slate-50 text-[8px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Produtos Encontrados:</p>
+                                                    {nameSuggestions.map(suggestion => (
+                                                        <button key={suggestion.id} type="button" 
+                                                            onClick={() => setFormData({
+                                                                ...formData, 
+                                                                name: suggestion.name,
+                                                                category: suggestion.category,
+                                                                minStock: suggestion.minStock,
+                                                                unitPrice: suggestion.unitPrice
+                                                            })}
+                                                            className="w-full px-4 py-3 text-left hover:bg-emerald-50 transition-colors flex justify-between items-center group"
+                                                        >
+                                                            <span className="font-bold text-slate-700 group-hover:text-emerald-700">{suggestion.name}</span>
+                                                            <span className="text-[10px] text-slate-300 uppercase font-black tracking-widest">{suggestion.category}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
+
+                                        {/* Histórico de Preços Detalhado (Aparece ao reconhecer o produto) */}
+                                        {itemHistory.length > 0 && (
+                                            <div className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 animate-in fade-in">
+                                                <div className="flex items-center gap-2 mb-3">
+                                                    <Icon name="history" size={14} className="text-emerald-600" />
+                                                    <p className="text-[10px] font-black uppercase text-slate-500">Histórico de Compras Deste Item:</p>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    {itemHistory.map((h, i) => (
+                                                        <div key={i} className="bg-white px-3 py-2 rounded-xl flex justify-between items-center shadow-sm border border-slate-50">
+                                                            <div>
+                                                                <p className="text-[9px] font-black text-slate-700">{h.timestamp?.toDate ? h.timestamp.toDate().toLocaleDateString('pt-BR') : 'Hoje'}</p>
+                                                                <p className="text-[8px] text-slate-400 uppercase font-bold tracking-tight">{h.details}</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <p className="text-[10px] font-black text-emerald-600">R$ {h.unitPrice.toFixed(2)}</p>
+                                                                <p className="text-[8px] text-slate-300 font-bold uppercase">{Math.abs(h.quantity)} un</p>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {!editingItem && (
                                             <div className="flex bg-slate-100 p-1 rounded-2xl">
                                                 <button type="button" onClick={() => setFormData({...formData, isBoxEntry: false})} className={`flex-1 py-2.5 text-[9px] font-black uppercase rounded-xl transition-all ${!formData.isBoxEntry ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400'}`}>Unitário</button>
                                                 <button type="button" onClick={() => setFormData({...formData, isBoxEntry: true})} className={`flex-1 py-2.5 text-[9px] font-black uppercase rounded-xl transition-all ${formData.isBoxEntry ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400'}`}>Caixa</button>
                                             </div>
                                         )}
+
                                         {formData.isBoxEntry ? (
                                             <div className="space-y-4 p-5 bg-emerald-50 rounded-[2rem] border border-emerald-100 animate-in slide-in-from-top-2">
                                                 <div className="grid grid-cols-2 gap-3">
@@ -595,7 +651,7 @@
                                                 </div>
                                                 <div className="bg-slate-900 rounded-2xl p-4 text-white flex justify-between items-center">
                                                     <div className="text-center flex-1 border-r border-slate-700">
-                                                        <p className="text-[8px] font-black uppercase text-emerald-400">Custo Un.</p>
+                                                        <p className="text-[8px] font-black uppercase text-emerald-400">Novo Custo Un.</p>
                                                         <p className="text-xl font-black">R$ {formData.unitPrice.toFixed(2)}</p>
                                                     </div>
                                                     <div className="text-center flex-1">
@@ -608,11 +664,11 @@
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div>
                                                     <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Preço Unitário</label>
-                                                    <input required type="number" step="0.01" value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
+                                                    <input required type="number" step="0.01" value={formData.unitPrice} onChange={e => setFormData({...formData, unitPrice: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500 shadow-inner" />
                                                 </div>
                                                 <div>
                                                     <label className="text-[10px] font-black uppercase text-slate-400 ml-1">{editingItem ? 'Stock Físico' : 'Qtd. Entrada'}</label>
-                                                    <input required type="number" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500" />
+                                                    <input required type="number" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="w-full px-5 py-3 bg-slate-50 rounded-2xl font-bold border-2 border-transparent focus:border-emerald-500 shadow-inner" />
                                                 </div>
                                             </div>
                                         )}
